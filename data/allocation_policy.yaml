@@ -1,17 +1,1 @@
 measured: false
-fees:
-  order_fee_pct: null
-  order_fee_fixed_cents: null
-  payout_fee_per_item_cents: null
-  buffer_cents: null
-  tolerance_cents: 5
-allocation:
-  max_binaries_cap: 50
-  per_project_cap_pct: 15
-  min_line_cents: 100
-need_factor:
-  archived: 0.5
-  inactive_12m: 0.8
-  committers_1: 1.5
-  committers_2_5: 1.2
-  committers_6_plus: 1.0
