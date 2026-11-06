@@ -41,7 +41,7 @@ def test_columns_types_and_money_are_lld_defined():
         "source_resolutions": {"id", "session_id", "source_name", "upstream_key", "method", "outcome", "evidence", "validated", "cached", "created_at"},
         "upstream_projects": {"id", "session_id", "upstream_key", "display_name", "repository_url", "binary_count", "source_names", "source_facts", "need_signals", "created_at"},
         "maintainers": {"id", "upstream_key", "display_name", "email", "opted_in", "created_at"},
-        "plans": {"id", "session_id", "state", "budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "charge_cents", "order_id", "order_attempt", "capture_attempt", "payout_attempt", "capture_gross_cents", "capture_fee_cents", "capture_net_cents", "failure_reason", "frozen_at", "created_at"},
+        "plans": {"id", "session_id", "state", "budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "charge_cents", "order_id", "approval_url", "order_attempt", "capture_attempt", "payout_attempt", "capture_gross_cents", "capture_fee_cents", "capture_net_cents", "failure_reason", "frozen_at", "created_at"},
         "plan_lines": {"id", "plan_id", "upstream_key", "display_name", "weight", "amount_cents", "payable_cents", "reserved_cents", "reason", "facts_snapshot"},
         "payout_batches": {"id", "plan_id", "attempt", "sender_batch_id", "external_id", "status", "fees_cents", "created_at"},
         "payout_items": {"id", "batch_id", "plan_id", "upstream_key", "sender_item_id", "recipient_email", "amount_cents", "status", "external_id", "updated_at"},

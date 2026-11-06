@@ -143,7 +143,7 @@ class ApproveResponse(Contract):
 class CaptureDetail(Contract):
     capture_id: str
     gross_cents: int = Field(strict=True)
-    fee_cents: int = Field(strict=True)
+    fee_cents: int | None = Field(default=None, strict=True)
     net_cents: int = Field(strict=True)
     currency: str
     status: str

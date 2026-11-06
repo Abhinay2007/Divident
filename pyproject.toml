@@ -16,6 +16,7 @@ dependencies = [
     "httpx>=0.27,<1",
     "psycopg[binary]>=3.2,<4",
     "groq>=0.11,<1",
+    "paypal @ git+https://github.com/context-plugins/paypal-python-sdk.git@143e57f2a3729d7df3727386b8c9ddf023d9a5df",
 ]
 
 [project.optional-dependencies]

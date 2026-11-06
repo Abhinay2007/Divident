@@ -151,6 +151,7 @@ class Plan(Base):
     est_payout_fees_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     charge_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     order_id: Mapped[str | None] = mapped_column(String(64))
+    approval_url: Mapped[str | None] = mapped_column(String(512))
     order_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     capture_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     payout_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

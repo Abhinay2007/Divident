@@ -67,6 +67,12 @@ def initialize_database(engine: Engine, metadata=None) -> None:
                 connection.exec_driver_sql(
                     "ALTER TABLE source_resolutions ADD COLUMN outcome VARCHAR(16) NOT NULL DEFAULT 'unmapped'"
                 )
+        inspector = inspect(engine)
+        if "plans" in inspector.get_table_names() and "approval_url" not in {
+            column["name"] for column in inspector.get_columns("plans")
+        }:
+            with engine.begin() as connection:
+                connection.exec_driver_sql("ALTER TABLE plans ADD COLUMN approval_url VARCHAR(512)")
         _upgrade_plan_persistence(engine)
 
 

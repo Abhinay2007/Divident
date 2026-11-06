@@ -26,6 +26,9 @@ from .enrichment.live import LiveEnricher
 from .enrichment.udd_client import UDDClient
 from .upstream.overrides import load_overrides
 from .services import SessionService
+from .payments.fake import FakeProvider
+from .payments.paypal import PayPalProvider
+from .services.payment_service import PaymentService
 
 
 def create_app(
@@ -34,24 +37,43 @@ def create_app(
     engine=None,
     session_factory=None,
     resolution_runner=None,
+    payment_provider=None,
 ) -> FastAPI:
     """Build an application with injectable persistence and T4 resolution seam."""
     configured = settings or get_settings()
     owns_engine = engine is None
     app_engine = engine or create_database_engine(configured.DATABASE_URL)
     factory = session_factory or create_session_factory(app_engine)
+    owns_provider = payment_provider is None and configured.PAYMENTS_MODE == "paypal"
+    provider = payment_provider
+    if provider is None and configured.PAYMENTS_MODE == "fake":
+        provider = FakeProvider()
+    elif provider is None and configured.PAYMENTS_MODE == "paypal":
+        provider = PayPalProvider(configured.PAYPAL_CLIENT_ID or "",
+                                  configured.PAYPAL_CLIENT_SECRET or "")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         initialize_database(app_engine)
-        yield
-        if owns_engine:
-            app_engine.dispose()
+        try:
+            yield
+        finally:
+            if owns_provider:
+                provider.close()
+            if owns_engine:
+                app_engine.dispose()
 
     app = FastAPI(title="Dividend", lifespan=lifespan)
     app.state.settings = configured
     app.state.engine = app_engine
     app.state.session_factory = factory
+    app.state.provider = provider
+    app.state.payment_service = (
+        PaymentService(provider, str(configured.PUBLIC_BASE_URL),
+                       configured.allocation_policy_path
+                       if configured.allocation_policy_path.exists() else None)
+        if provider is not None else None
+    )
     if resolution_runner is None and owns_engine and configured.ENRICH_MODE == "fixtures":
         def resolution_runner(session_id: str) -> None:
             with factory() as db:

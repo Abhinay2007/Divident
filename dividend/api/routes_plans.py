@@ -5,11 +5,12 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..models import Plan
 from ..schemas import (
-    MoneySummary, PlanBudgetPatchRequest, PlanCreateRequest, PlanLineResponse,
-    PlanResponse,
+    ApproveResponse, CaptureResponse, MoneySummary, PlanBudgetPatchRequest,
+    PlanCreateRequest, PlanLineResponse, PlanResponse, PayoutResponse,
+    PayoutsResponse,
 )
 from ..services import PlanService
-from .deps import get_db
+from .deps import get_db, get_payment_service
 
 
 router = APIRouter(prefix="/api", tags=["plans"])
@@ -83,6 +84,37 @@ async def adjust_budget(
     ))
 
 
-@router.post("/plans/{plan_id}/approve", response_model=PlanResponse)
-async def approve_plan(plan_id: str, db: DbSession = Depends(get_db)):
-    return _plan_response(PlanService.approve(db, plan_id))
+@router.post("/plans/{plan_id}/approve", response_model=ApproveResponse)
+def approve_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+    return service.approve_and_fund(plan_id, db)
+
+
+@router.post("/plans/{plan_id}/capture", response_model=CaptureResponse)
+def capture_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+    return service.capture(plan_id, db)
+
+
+@router.post("/plans/{plan_id}/payout", response_model=PayoutResponse)
+def payout_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+    return service.payout(plan_id, db)
+
+
+@router.post("/plans/{plan_id}/payout/retry", response_model=PayoutResponse)
+def retry_payout_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+    return service.retry_payout(plan_id, db)
+
+
+@router.post("/plans/{plan_id}/reconcile", response_model=PayoutsResponse)
+def reconcile_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+    return service.reconcile(plan_id, db)
+
+
+@router.get("/plans/{plan_id}/payouts", response_model=PayoutsResponse)
+def get_payouts(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+    return service.get_payouts(plan_id, db)
+
+
+@router.post("/plans/{plan_id}/cancel", status_code=200)
+def cancel_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+    service.cancel(plan_id, db)
+    return {"state": "cancelled"}

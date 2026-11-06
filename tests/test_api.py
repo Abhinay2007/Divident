@@ -157,16 +157,14 @@ def test_end_to_end_api_intake_to_plan_budget_adjustment_and_approval(tmp_path):
         assert sum(line["amount_cents"] for line in adjusted.json()["lines"]) == 1100
 
         approved = await client.post(f"/api/plans/{plan['id']}/approve")
-        assert approved.status_code == 200, approved.text
-        assert approved.json()["state"] == "funding"
-        assert approved.json()["frozen_at"] is not None
-        assert approved.json()["charge_cents"] is None
+        assert approved.status_code == 422, approved.text
+        assert approved.json()["code"] == "charge_unavailable"
+        assert (await client.get(f"/api/plans/{plan['id']}")).json()["state"] == "draft"
 
-        frozen_edit = await client.patch(
+        still_editable = await client.patch(
             f"/api/plans/{plan['id']}/budget",
             json={"budget_cents": 1000, "evaluation_date": "2026-11-06"},
         )
-        assert frozen_edit.status_code == 409
-        assert frozen_edit.json()["error"] == "state_error"
+        assert still_editable.status_code == 200
     asyncio.run(exercise())
     engine.dispose()

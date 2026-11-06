@@ -3,6 +3,8 @@
 from fastapi import Request
 from sqlalchemy.orm import Session
 
+from ..errors import PaymentProviderError
+
 
 async def get_db(request: Request):
     factory = request.app.state.session_factory
@@ -16,3 +18,10 @@ async def get_db(request: Request):
         raise
     finally:
         db.close()
+
+
+def get_payment_service(request: Request):
+    service = getattr(request.app.state, "payment_service", None)
+    if service is None:
+        raise PaymentProviderError("Payment provider is unavailable", code="payment_provider_unavailable")
+    return service

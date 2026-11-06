@@ -11,7 +11,7 @@ from ..allocation import (
     load_allocation_policy,
 )
 from ..allocation.snapshot import build_facts_snapshot
-from ..errors import NotFoundError, StateError, ValidationError
+from ..errors import CaptureMismatch, NotFoundError, StateError, ValidationError
 from ..ledger import LedgerService, append as append_ledger_event
 from ..models import Maintainer, Plan, PlanLine, Session, SourceResolution, UpstreamProject
 
@@ -460,4 +460,69 @@ class PlanService:
             transition_db.close()
 
         db.expire(plan)
+        return plan
+
+    @staticmethod
+    def transition(db: DbSession, plan_id: str, from_state: str, to_state: str,
+                   event_type: str, payload: dict, *, additional_events=None) -> None:
+        """Keep all production plan-state writes behind PlanService."""
+        LedgerService.transition_plan(db, plan_id, from_state, to_state, event_type,
+                                      payload, additional_events=additional_events)
+
+    @staticmethod
+    def mark_captured(db: DbSession, plan_id: str, capture, tolerance_cents: int) -> Plan:
+        plan = PlanService.get(db, plan_id)
+        if plan.state != "funding":
+            raise StateError("Plan is not awaiting capture", code="invalid_plan_transition",
+                             current_state=plan.state, allowed_transitions=["funded"])
+        if plan.charge_cents is None or plan.est_payout_fees_cents is None:
+            raise ValidationError("Funding requirements are unavailable", code="charge_unavailable")
+        amounts = (capture.gross_cents, capture.fee_cents, capture.net_cents)
+        if (type(capture.gross_cents) is not int or capture.gross_cents < 0
+                or (capture.fee_cents is not None and
+                    (type(capture.fee_cents) is not int or capture.fee_cents < 0))
+                or type(capture.net_cents) is not int or capture.net_cents < 0):
+            raise CaptureMismatch("Capture amounts must be nonnegative integer cents", code="capture_mismatch")
+        if (type(capture.capture_id) is not str or not capture.capture_id
+                or type(capture.currency) is not str or type(capture.status) is not str
+                or capture.currency != "USD" or capture.gross_cents != plan.charge_cents
+                or (capture.fee_cents is not None and
+                    capture.gross_cents - capture.fee_cents != capture.net_cents)
+                or capture.status.upper() != "COMPLETED"):
+            reason = "CAPTURE_MISMATCH"
+            plan.failure_reason = reason
+            plan.capture_gross_cents, plan.capture_fee_cents, plan.capture_net_cents = amounts
+            PlanService.transition(db, plan_id, "funding", "failed", reason, {
+                "capture_id": getattr(capture, "capture_id", None),
+                "gross_cents": capture.gross_cents, "charge_cents": plan.charge_cents,
+                "fee_cents": capture.fee_cents, "net_cents": capture.net_cents,
+                "currency": capture.currency, "status": capture.status,
+            })
+            return plan
+
+        required = plan.payable_total_cents + plan.est_payout_fees_cents
+        plan.capture_gross_cents, plan.capture_fee_cents, plan.capture_net_cents = amounts
+        if capture.net_cents < required - tolerance_cents:
+            plan.failure_reason = "FUNDING_SHORTFALL"
+            PlanService.transition(db, plan_id, "funding", "failed", "FUNDING_SHORTFALL", {
+                "required_cents": required, "net_cents": capture.net_cents,
+                "tolerance_cents": tolerance_cents,
+            }, additional_events=[{"type": "ORDER_CAPTURED", "payload": {
+                "capture_id": capture.capture_id, "gross_cents": capture.gross_cents,
+                "fee_cents": capture.fee_cents, "net_cents": capture.net_cents,
+            }, "external_id": capture.capture_id}])
+            return plan
+
+        events = [{"type": "FEE_ACTUALIZED", "payload": {
+            "estimated_cents": plan.charge_cents - plan.payable_total_cents,
+            "actual_cents": capture.fee_cents,
+        }, "external_id": capture.capture_id}]
+        if capture.net_cents > required + tolerance_cents:
+            events.append({"type": "SURPLUS_RETAINED", "payload": {
+                "amount_cents": capture.net_cents - required,
+            }, "external_id": capture.capture_id})
+        PlanService.transition(db, plan_id, "funding", "funded", "ORDER_CAPTURED", {
+            "capture_id": capture.capture_id, "gross_cents": capture.gross_cents,
+            "fee_cents": capture.fee_cents, "net_cents": capture.net_cents,
+        }, additional_events=events)
         return plan
