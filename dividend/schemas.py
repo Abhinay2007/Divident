@@ -1,7 +1,7 @@
 """Public API request and response contracts from the LLD."""
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -27,18 +27,33 @@ class SessionCreateRequest(Contract):
         if self.mode == "upload":
             if not isinstance(self.payload, dict) or set(self.payload) != {"schema", "origin", "binary_count", "source_count", "sources"}:
                 raise ValueError("upload payload must match scan.json shape")
-            if (self.payload["schema"] != 1 or not isinstance(self.payload["origin"], str)
-                    or type(self.payload["binary_count"]) is not int or type(self.payload["source_count"]) is not int
+            if (type(self.payload["schema"]) is not int or self.payload["schema"] != 1
+                    or type(self.payload["origin"]) is not str or not self.payload["origin"].strip()
+                    or type(self.payload["binary_count"]) is not int or self.payload["binary_count"] < 0
+                    or type(self.payload["source_count"]) is not int or self.payload["source_count"] < 0
                     or not isinstance(self.payload["sources"], dict)):
                 raise ValueError("upload payload must match scan.json shape")
             sources = self.payload["sources"]
             if len(sources) > 5000:
                 raise ValueError("source count must not exceed 5000")
+            if self.payload["source_count"] != len(sources):
+                raise ValueError("source_count must match sources")
+            binary_names: set[str] = set()
             for source, binaries in sources.items():
                 if not isinstance(source, str) or not SOURCE_NAME_RE.fullmatch(source):
                     raise ValueError("source names must match the Debian package-name pattern")
-                if not isinstance(binaries, list) or not all(isinstance(binary, str) for binary in binaries):
+                if not isinstance(binaries, list) or not all(
+                    isinstance(binary, str) and SOURCE_NAME_RE.fullmatch(binary)
+                    for binary in binaries
+                ):
                     raise ValueError("scan sources must map source names to binary-name lists")
+                if len(binaries) != len(set(binaries)):
+                    raise ValueError("binary names within a source must be unique")
+                if binary_names.intersection(binaries):
+                    raise ValueError("a binary package cannot belong to multiple sources")
+                binary_names.update(binaries)
+            if self.payload["binary_count"] != len(binary_names):
+                raise ValueError("binary_count must match source binary membership")
         return self
 
 
@@ -73,10 +88,12 @@ class ProjectsResponse(Contract):
 
 class PlanCreateRequest(Contract):
     budget_cents: int = Field(ge=100, le=1_000_000, strict=True)
+    evaluation_date: date
 
 
 class PlanBudgetPatchRequest(Contract):
-    budget_cents: int = Field(strict=True)
+    budget_cents: int = Field(ge=100, le=1_000_000, strict=True)
+    evaluation_date: date
 
 
 class PlanLineResponse(Contract):
@@ -87,13 +104,13 @@ class PlanLineResponse(Contract):
     reserved_cents: int = Field(strict=True)
     payability: str
     reason: str
-    facts_snapshot: dict[str, Any]
+    facts_snapshot: dict[str, Any] | None
 
 
 class MoneySummary(Contract):
-    charged_now_cents: int = Field(strict=True)
+    charged_now_cents: int | None = Field(strict=True)
     pledged_cents: int = Field(strict=True)
-    fee_estimate_cents: int = Field(strict=True)
+    fee_estimate_cents: int | None = Field(strict=True)
 
 
 class PlanResponse(Contract):
@@ -103,8 +120,8 @@ class PlanResponse(Contract):
     budget_cents: int = Field(strict=True)
     payable_total_cents: int = Field(strict=True)
     reserved_total_cents: int = Field(strict=True)
-    est_payout_fees_cents: int = Field(strict=True)
-    charge_cents: int = Field(strict=True)
+    est_payout_fees_cents: int | None = Field(strict=True)
+    charge_cents: int | None = Field(strict=True)
     order_id: str | None
     order_attempt: int
     capture_attempt: int

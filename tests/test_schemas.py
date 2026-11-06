@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -34,18 +34,24 @@ def test_upload_matches_scanner_shape_and_source_limit():
     over_limit = {f"src{i}": [f"bin{i}"] for i in range(5001)}
     with pytest.raises(ValidationError, match="5000"):
         SessionCreateRequest(mode="upload", payload={**report(), "source_count": 5001, "sources": over_limit})
+    with pytest.raises(ValidationError, match="source_count"):
+        SessionCreateRequest(mode="upload", payload={**report(), "source_count": 2})
+    with pytest.raises(ValidationError, match="binary_count"):
+        SessionCreateRequest(mode="upload", payload={**report(), "binary_count": 3})
 
 
 @pytest.mark.parametrize("value", [99, 1_000_001, True, 100.0])
 def test_plan_create_rejects_out_of_range_or_non_integer_budget(value):
     with pytest.raises(ValidationError):
-        PlanCreateRequest(budget_cents=value)
+        PlanCreateRequest(budget_cents=value, evaluation_date=date(2026, 11, 6))
 
 
 def test_budget_boundaries_and_patch_contract():
-    assert PlanCreateRequest(budget_cents=100).budget_cents == 100
-    assert PlanCreateRequest(budget_cents=1_000_000).budget_cents == 1_000_000
-    assert PlanBudgetPatchRequest(budget_cents=-1).budget_cents == -1
+    assert PlanCreateRequest(budget_cents=100, evaluation_date=date(2026, 11, 6)).budget_cents == 100
+    assert PlanCreateRequest(budget_cents=1_000_000, evaluation_date=date(2026, 11, 6)).budget_cents == 1_000_000
+    assert PlanBudgetPatchRequest(budget_cents=100, evaluation_date=date(2026, 11, 6)).budget_cents == 100
+    with pytest.raises(ValidationError):
+        PlanBudgetPatchRequest(budget_cents=-1, evaluation_date=date(2026, 11, 6))
 
 
 def test_live_resolve_source_validation_and_count():
@@ -76,6 +82,22 @@ def test_all_response_contracts_construct_with_documented_fields():
     plan = PlanResponse(id="p", session_id="s", state="draft", budget_cents=100, payable_total_cents=100, reserved_total_cents=0, est_payout_fees_cents=0, charge_cents=100, order_id=None, order_attempt=0, capture_attempt=0, payout_attempt=0, capture_gross_cents=None, capture_fee_cents=None, capture_net_cents=None, failure_reason=None, frozen_at=None, lines=[line], money_summary=MoneySummary(charged_now_cents=100, pledged_cents=0, fee_estimate_cents=0))
     assert ProjectsResponse(projects=[project], unmapped=[], no_upstream=[]).projects
     assert PlanResponse.model_validate(plan.model_dump()).id == "p"
+    unavailable = PlanResponse(
+        id="unknown-fees", session_id="s", state="draft", budget_cents=100,
+        payable_total_cents=100, reserved_total_cents=0,
+        est_payout_fees_cents=None, charge_cents=None, order_id=None,
+        order_attempt=0, capture_attempt=0, payout_attempt=0,
+        capture_gross_cents=None, capture_fee_cents=None, capture_net_cents=None,
+        failure_reason=None, frozen_at=None, lines=[line],
+        money_summary=MoneySummary(charged_now_cents=None, pledged_cents=0, fee_estimate_cents=None),
+    )
+    assert unavailable.charge_cents is None
+    legacy_line = PlanLineResponse(
+        upstream_key="legacy/repo", display_name="Legacy", amount_cents=100,
+        payable_cents=0, reserved_cents=100, payability="reserved",
+        reason="legacy line", facts_snapshot=None,
+    )
+    assert legacy_line.facts_snapshot is None
     assert ApproveResponse(order_id="o", approval_url="https://example.test").order_id == "o"
     assert PayoutResponse(batch_id="b", item_count=1, state="paying").item_count == 1
     assert LedgerResponse(events=[LedgerEventResponse(id="e", type="T", plan_id=None, session_id=None, external_id=None, payload={}, created_at=datetime.now(UTC))], next_cursor=None).events

@@ -2,7 +2,9 @@ from datetime import UTC
 from uuid import UUID
 
 import pytest
-from sqlalchemy import Integer, inspect
+from decimal import Decimal
+
+from sqlalchemy import Integer, Text, inspect
 from sqlalchemy.exc import IntegrityError
 
 import dividend.models as models
@@ -35,9 +37,9 @@ def test_import_registers_exactly_ten_expected_tables():
 
 def test_columns_types_and_money_are_lld_defined():
     expected = {
-        "sessions": {"id", "mode", "status", "source_names", "binary_count", "source_count", "stage", "progress_done", "progress_total", "error_message", "created_at", "expires_at"},
+        "sessions": {"id", "mode", "status", "source_names", "source_binaries", "binary_count", "source_count", "stage", "progress_done", "progress_total", "error_message", "created_at", "expires_at"},
         "source_resolutions": {"id", "session_id", "source_name", "upstream_key", "method", "evidence", "validated", "cached", "created_at"},
-        "upstream_projects": {"id", "session_id", "upstream_key", "display_name", "repository_url", "binary_count", "source_names", "need_signals", "created_at"},
+        "upstream_projects": {"id", "session_id", "upstream_key", "display_name", "repository_url", "binary_count", "source_names", "source_facts", "need_signals", "created_at"},
         "maintainers": {"id", "upstream_key", "display_name", "email", "opted_in", "created_at"},
         "plans": {"id", "session_id", "state", "budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "charge_cents", "order_id", "order_attempt", "capture_attempt", "payout_attempt", "capture_gross_cents", "capture_fee_cents", "capture_net_cents", "failure_reason", "frozen_at", "created_at"},
         "plan_lines": {"id", "plan_id", "upstream_key", "display_name", "weight", "amount_cents", "payable_cents", "reserved_cents", "reason", "facts_snapshot"},
@@ -50,6 +52,10 @@ def test_columns_types_and_money_are_lld_defined():
     money_columns = ["budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "charge_cents", "capture_gross_cents", "capture_fee_cents", "capture_net_cents"]
     for name in money_columns:
         assert isinstance(Base.metadata.tables["plans"].c[name].type, Integer)
+    assert Base.metadata.tables["plans"].c["est_payout_fees_cents"].nullable is True
+    assert Base.metadata.tables["plans"].c["charge_cents"].nullable is True
+    assert isinstance(Base.metadata.tables["plan_lines"].c["weight"].type.impl, Text)
+    assert Base.metadata.tables["plan_lines"].c["facts_snapshot"].nullable is True
     for table_name, column_name in (("plan_lines", "amount_cents"), ("plan_lines", "payable_cents"), ("plan_lines", "reserved_cents"), ("payout_items", "amount_cents"), ("payout_batches", "fees_cents")):
         assert isinstance(Base.metadata.tables[table_name].c[column_name].type, Integer)
 
@@ -172,3 +178,40 @@ def test_payout_item_updated_at_defaults_and_updates(database):
         assert updated.updated_at > initial_updated_at
         assert updated.updated_at.tzinfo is not None
         assert updated.updated_at.utcoffset().total_seconds() == 0
+
+
+def test_plan_line_weight_text_type_round_trips_complete_decimal(database):
+    _, factory = database
+    exact = Decimal("123456789012345678901234567890.12345678901234567890")
+    with factory.begin() as session:
+        parent = models.Session(mode="upload", source_names=["pkg"], source_count=1)
+        session.add(parent)
+        session.flush()
+        plan = models.Plan(
+            session_id=parent.id,
+            budget_cents=100,
+            payable_total_cents=100,
+            reserved_total_cents=0,
+            est_payout_fees_cents=None,
+            charge_cents=None,
+        )
+        session.add(plan)
+        session.flush()
+        line = models.PlanLine(
+            plan_id=plan.id,
+            upstream_key="owner/repo",
+            display_name="Project",
+            weight=exact,
+            amount_cents=100,
+            payable_cents=100,
+            reserved_cents=0,
+            reason="test",
+            facts_snapshot=None,
+        )
+        session.add(line)
+        session.flush()
+        line_id = line.id
+    with factory() as session:
+        persisted = session.get(models.PlanLine, line_id)
+        assert persisted.weight == exact
+        assert type(persisted.weight) is Decimal

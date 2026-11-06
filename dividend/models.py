@@ -1,9 +1,10 @@
 """SQLAlchemy entities defined by the Dividend LLD."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -43,6 +44,28 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value.astimezone(UTC)
 
 
+class ExactDecimalText(TypeDecorator[Decimal]):
+    """Persist finite Decimal values as exact, exponent-preserving text."""
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: Decimal | None, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if type(value) is not Decimal or not value.is_finite():
+            raise TypeError("weight must be a finite Decimal")
+        return str(value)
+
+    def process_result_value(self, value: str | None, dialect: Dialect) -> Decimal | None:
+        if value is None:
+            return None
+        result = Decimal(value)
+        if not result.is_finite():
+            raise ValueError("persisted weight must be finite")
+        return result
+
+
 class Session(Base):
     __tablename__ = "sessions"
     __table_args__ = (Index("ix_sessions_status", "status"), Index("ix_sessions_created_at", "created_at"))
@@ -51,6 +74,8 @@ class Session(Base):
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="created")
     source_names: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # NULL only for legacy sessions or paste intake without binary membership.
+    source_binaries: Mapped[dict[str, list[str]] | None] = mapped_column(JSON, nullable=True)
     binary_count: Mapped[int | None] = mapped_column(Integer)
     source_count: Mapped[int] = mapped_column(Integer, nullable=False)
     stage: Mapped[str | None] = mapped_column(String(32))
@@ -93,6 +118,8 @@ class UpstreamProject(Base):
     repository_url: Mapped[str | None] = mapped_column(String(512))
     binary_count: Mapped[int] = mapped_column(Integer, nullable=False)
     source_names: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # Per-source original FactSet payloads; nullable only for pre-upgrade rows.
+    source_facts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     need_signals: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
@@ -120,8 +147,8 @@ class Plan(Base):
     budget_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     payable_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     reserved_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    est_payout_fees_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    charge_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    est_payout_fees_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    charge_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     order_id: Mapped[str | None] = mapped_column(String(64))
     order_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     capture_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -134,7 +161,9 @@ class Plan(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
     session: Mapped["Session"] = relationship(back_populates="plans")
-    lines: Mapped[list["PlanLine"]] = relationship(back_populates="plan")
+    lines: Mapped[list["PlanLine"]] = relationship(
+        back_populates="plan", order_by="PlanLine.upstream_key"
+    )
     payout_batches: Mapped[list["PayoutBatch"]] = relationship(back_populates="plan")
     payout_items: Mapped[list["PayoutItem"]] = relationship(back_populates="plan")
     ledger_events: Mapped[list["LedgerEvent"]] = relationship(back_populates="plan")
@@ -147,12 +176,13 @@ class PlanLine(Base):
     plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"), nullable=False)
     upstream_key: Mapped[str] = mapped_column(String(256), nullable=False)
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    weight: Mapped[float] = mapped_column(Numeric(10, 4), nullable=False)
+    weight: Mapped[Decimal] = mapped_column(ExactDecimalText(), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     payable_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     reserved_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
-    facts_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Nullable only for legacy rows created before immutable snapshots existed.
+    facts_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     plan: Mapped["Plan"] = relationship(back_populates="lines")
 
