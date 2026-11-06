@@ -166,6 +166,26 @@ def test_fresh_database_has_source_facts_column(tmp_path):
     engine.dispose()
 
 
+def test_source_resolution_outcome_upgrade_is_additive_and_idempotent(tmp_path):
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'legacy-resolution.db'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE source_resolutions (id VARCHAR(36) PRIMARY KEY, method VARCHAR(16) NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO source_resolutions (id, method) VALUES ('legacy', 'none')"
+        )
+    initialize_database(engine)
+    initialize_database(engine)
+    columns = {column["name"] for column in inspect(engine).get_columns("source_resolutions")}
+    assert "outcome" in columns
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT id, method, outcome FROM source_resolutions WHERE id='legacy'"
+        ).one() == ("legacy", "none", "unmapped")
+    engine.dispose()
+
+
 def test_plan_persistence_upgrade_is_additive_idempotent_and_keeps_legacy_rows(tmp_path):
     from dividend import models
 

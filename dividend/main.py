@@ -20,6 +20,12 @@ from .api.middleware import RequestContextMiddleware
 from .api.routes_plans import router as plans_router
 from .api.routes_sessions import router as sessions_router
 from .schemas import HealthResponse
+from .enrichment.fixtures import FixtureEnricher
+from .enrichment.github_client import GitHubClient
+from .enrichment.live import LiveEnricher
+from .enrichment.udd_client import UDDClient
+from .upstream.overrides import load_overrides
+from .services import SessionService
 
 
 def create_app(
@@ -46,7 +52,36 @@ def create_app(
     app.state.settings = configured
     app.state.engine = app_engine
     app.state.session_factory = factory
-    # T4 installs a deterministic resolver/enrichment runner here.
+    if resolution_runner is None and owns_engine and configured.ENRICH_MODE == "fixtures":
+        def resolution_runner(session_id: str) -> None:
+            with factory() as db:
+                try:
+                    SessionService.resolve_sources(
+                        db, session_id,
+                        FixtureEnricher(Path(__file__).parent / "data" / "demo_enrichment.json"),
+                        load_overrides(),
+                    )
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    with factory() as failed_db:
+                        SessionService.mark_failed(failed_db, session_id, str(exc)[:500])
+                        failed_db.commit()
+    elif resolution_runner is None and owns_engine and configured.ENRICH_MODE == "live":
+        def resolution_runner(session_id: str) -> None:
+            with factory() as db:
+                try:
+                    SessionService.resolve_sources(
+                        db, session_id,
+                        LiveEnricher(UDDClient(configured.UDD_DSN), GitHubClient(configured.GITHUB_TOKEN)),
+                        load_overrides(),
+                    )
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    with factory() as failed_db:
+                        SessionService.mark_failed(failed_db, session_id, str(exc)[:500])
+                        failed_db.commit()
     app.state.resolution_runner = resolution_runner
     app.add_middleware(RequestContextMiddleware)
     app.include_router(sessions_router)

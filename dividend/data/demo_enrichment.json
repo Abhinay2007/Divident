@@ -1,0 +1,20 @@
+{
+  "sources": {
+    "apt": {"repository_url": "https://salsa.debian.org/apt-team/apt.git", "partial": true},
+    "bash": {"repository_url": "https://git.savannah.gnu.org/git/bash.git", "partial": true},
+    "coreutils": {"repository_url": "https://git.savannah.gnu.org/git/coreutils.git", "partial": true},
+    "dpkg": {"repository_url": "https://git.dpkg.org/cgit/dpkg/dpkg.git", "partial": true},
+    "glibc": {"repository_url": "https://sourceware.org/git/glibc.git", "partial": true},
+    "systemd": {"repository_url": "https://github.com/systemd/systemd.git", "partial": true},
+    "libxcb": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
+    "xcb-util-cursor": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
+    "xcb-util-wm": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
+    "xcb-util-image": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
+    "xcb-util-keysyms": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
+    "xcb-util-renderutil": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
+    "libxcb-doc": {"partial": true},
+    "libc": {"repository_url": "https://sourceware.org/git/glibc.git", "partial": true},
+    "linux-signed-amd64": {"partial": true},
+    "linux-latest": {"partial": true}
+  }
+}

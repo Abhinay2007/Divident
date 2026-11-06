@@ -59,6 +59,14 @@ def initialize_database(engine: Engine, metadata=None) -> None:
                 connection.exec_driver_sql(
                     "ALTER TABLE sessions ADD COLUMN source_binaries JSON"
                 )
+        inspector = inspect(engine)
+        if "source_resolutions" in inspector.get_table_names() and "outcome" not in {
+            column["name"] for column in inspector.get_columns("source_resolutions")
+        }:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "ALTER TABLE source_resolutions ADD COLUMN outcome VARCHAR(16) NOT NULL DEFAULT 'unmapped'"
+                )
         _upgrade_plan_persistence(engine)
 
 

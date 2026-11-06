@@ -99,6 +99,7 @@ class SourceResolution(Base):
     source_name: Mapped[str] = mapped_column(String(200), nullable=False)
     upstream_key: Mapped[str | None] = mapped_column(String(256))
     method: Mapped[str] = mapped_column(String(16), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, default="unmapped")
     evidence: Mapped[list[dict] | None] = mapped_column(JSON)
     validated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
