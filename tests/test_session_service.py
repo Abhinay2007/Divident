@@ -57,6 +57,8 @@ def test_create_paste_preserves_source_names_and_marks_binary_membership_unknown
         assert session.source_binaries is None
         assert session.binary_count is None
         assert session.source_count == 2
+        result = SessionService.get_projects(db, session.id)
+        assert all(source.binary_names is None for source in result.sources)
 
 
 def test_create_demo_uses_bundled_scanner_fixture_membership(db_factory):
@@ -119,8 +121,10 @@ def test_get_projects_uses_maintainer_opt_in_and_does_not_guess_no_upstream(db_f
         session = SessionService.create(db, "upload", scan_payload())
         session_id = session.id
         resolutions = list(db.scalars(select(SourceResolution).where(SourceResolution.session_id == session_id)))
+        mapped_source, unmapped_source = resolutions[0].source_name, resolutions[1].source_name
         resolutions[0].method = "override"
         resolutions[0].upstream_key = "owner/repo"
+        resolutions[0].outcome = "resolved"
         resolutions[1].method = "none"
         project = UpstreamProject(
             session_id=session_id,
@@ -151,3 +155,10 @@ def test_get_projects_uses_maintainer_opt_in_and_does_not_guess_no_upstream(db_f
         assert result.projects[0].payability == "payable"
         assert result.unmapped == [resolutions[1].source_name]
         assert result.no_upstream == []
+        details = {item.source_name: item for item in result.sources}
+        assert details[mapped_source].binary_names == sorted(scan_payload()["sources"][mapped_source])
+        assert details[mapped_source].upstream_key == "owner/repo"
+        assert details[mapped_source].method == "override"
+        assert details[mapped_source].outcome == "resolved"
+        assert details[unmapped_source].binary_names == scan_payload()["sources"][unmapped_source]
+        assert details[unmapped_source].outcome == "unmapped"

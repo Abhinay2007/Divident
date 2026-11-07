@@ -19,7 +19,7 @@ from ..upstream.mapper import map_source
 from ..upstream.overrides import OverrideConfig
 from ..upstream.resolver import LLMProvider, resolve
 from ..scan import group_by_source, parse_rows
-from ..schemas import ProjectsResponse, ProjectResponse, SessionCreateRequest
+from ..schemas import ProjectsResponse, ProjectResponse, SessionCreateRequest, SourceDetailResponse
 
 
 _PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.\-]*$")
@@ -279,6 +279,22 @@ class SessionService:
         no_upstream = sorted(row.source_name for row in resolutions if row.outcome == "no_upstream")
         mapped_resolution_names = {row.source_name for row in resolutions}
         unmapped = sorted(set(unmapped) | (known_sources - mapped_resolution_names))
+        resolution_by_name = {row.source_name: row for row in resolutions}
+        sources = [
+            SourceDetailResponse(
+                source_name=name,
+                binary_names=(
+                    sorted(session.source_binaries[name])
+                    if isinstance(session.source_binaries, dict)
+                    and isinstance(session.source_binaries.get(name), list)
+                    else None
+                ),
+                upstream_key=resolution_by_name[name].upstream_key if name in resolution_by_name else None,
+                method=resolution_by_name[name].method if name in resolution_by_name else "none",
+                outcome=resolution_by_name[name].outcome if name in resolution_by_name else "unmapped",
+            )
+            for name in sorted(known_sources)
+        ]
         responses = []
         for project in projects:
             is_payable = opted_in.get(project.upstream_key) is True
@@ -296,7 +312,7 @@ class SessionService:
                     else "No opted-in maintainer is available"
                 ),
             ))
-        return ProjectsResponse(projects=responses, unmapped=unmapped, no_upstream=no_upstream)
+        return ProjectsResponse(projects=responses, unmapped=unmapped, no_upstream=no_upstream, sources=sources)
 
     @staticmethod
     def resolve_sources(db: DbSession, session_id: str, enricher: Enricher,

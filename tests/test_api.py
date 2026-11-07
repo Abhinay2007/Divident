@@ -60,7 +60,11 @@ def test_api_session_validation_request_id_and_health_startup(tmp_path):
         projects = await client.get(f"/api/sessions/{session_id}/projects")
         assert projects.status_code == 200
         assert projects.json() == {
-            "projects": [], "unmapped": ["src-0", "src-1"], "no_upstream": []
+            "projects": [], "unmapped": ["src-0", "src-1"], "no_upstream": [],
+            "sources": [
+                {"source_name": "src-0", "binary_names": ["bin-0"], "upstream_key": None, "method": "none", "outcome": "unmapped"},
+                {"source_name": "src-1", "binary_names": ["bin-1"], "upstream_key": None, "method": "none", "outcome": "unmapped"},
+            ],
         }
 
         bad = await client.post(

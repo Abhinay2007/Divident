@@ -80,10 +80,19 @@ class ProjectResponse(Contract):
     reason_summary: str
 
 
+class SourceDetailResponse(Contract):
+    source_name: str
+    binary_names: list[str] | None
+    upstream_key: str | None
+    method: str
+    outcome: str
+
+
 class ProjectsResponse(Contract):
     projects: list[ProjectResponse]
     unmapped: list[str]
     no_upstream: list[str]
+    sources: list[SourceDetailResponse] = Field(default_factory=list)
 
 
 class PlanCreateRequest(Contract):

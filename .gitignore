@@ -28,6 +28,7 @@ coverage.xml
 
 # Node dependencies and frontend build output
 node_modules/
+*.tsbuildinfo
 frontend/dist/
 frontend/.vite/
 dist/

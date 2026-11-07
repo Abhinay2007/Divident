@@ -33,13 +33,16 @@ async def create_session(
     background_tasks: BackgroundTasks,
     db: DbSession = Depends(get_db),
 ):
-    return _session_response(SessionService.create(
+    session = SessionService.create(
         db,
         request.mode,
         request.payload,
         background_tasks=background_tasks,
         resolution_runner=getattr(http_request.app.state, "resolution_runner", None),
-    ))
+    )
+    # The background resolver opens a separate DB session and must see the new row.
+    db.commit()
+    return _session_response(session)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
