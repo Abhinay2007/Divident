@@ -98,6 +98,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
         ? 'Approval is unavailable because the required payment fee inputs are not measured. No order was created.'
         : code === 'order_outcome_unknown'
           ? 'The order result is uncertain. Check the plan status before taking another payment action.'
+          : code === 'no_failed_payout_items'
+            ? 'There are no failed payout items eligible for retry.'
           : undefined
     throw new ApiError(
       knownMessage || (typeof detail === 'string' ? detail : `Request failed (${response.status}). Try again.`),
@@ -158,4 +160,40 @@ export type Capture = {
 
 export function capturePlan(id: string) {
   return request<Capture>(`/api/plans/${encodeURIComponent(id)}/capture`, { method: 'POST' })
+}
+
+export type PayoutItem = {
+  sender_item_id: string
+  upstream_key: string
+  recipient_email: string
+  amount_cents: number
+  status: string
+  updated_at: string
+}
+
+export type PayoutBatch = {
+  id: string
+  attempt: number
+  status: string
+  fees_cents: number | null
+  items: PayoutItem[]
+}
+
+export type Payouts = { batches: PayoutBatch[] }
+export type PayoutAction = { batch_id: string; item_count: number; state: string }
+
+export function getPayouts(id: string) {
+  return request<Payouts>(`/api/plans/${encodeURIComponent(id)}/payouts`)
+}
+
+export function dispatchPayouts(id: string) {
+  return request<PayoutAction>(`/api/plans/${encodeURIComponent(id)}/payout`, { method: 'POST' })
+}
+
+export function retryFailedPayouts(id: string) {
+  return request<PayoutAction>(`/api/plans/${encodeURIComponent(id)}/payout/retry`, { method: 'POST' })
+}
+
+export function reconcilePayouts(id: string) {
+  return request<Payouts>(`/api/plans/${encodeURIComponent(id)}/reconcile`, { method: 'POST' })
 }

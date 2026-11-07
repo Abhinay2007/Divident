@@ -186,6 +186,22 @@ def test_payout_excludes_reserved_lines_then_retries_only_failed_items(db_factor
     assert all(row.amount_cents > 0 for row in rows)
 
 
+def test_pending_item_prevents_settlement_when_batch_status_is_success(db_factory):
+    plan_id = make_plan(db_factory)
+    first_sender_item = f"p{plan_id[:8]}-a1-000"
+    second_sender_item = f"p{plan_id[:8]}-a1-001"
+    provider = FakeProvider(outcomes={first_sender_item: "pending", second_sender_item: "failed"})
+    payments = service(provider)
+    with db_factory() as db:
+        batch = payments.payout(plan_id, db)
+    assert batch.state == "success"
+    with db_factory() as db:
+        result = payments.reconcile(plan_id, db)
+    assert {item.status for item in result.batches[0].items} == {"pending", "failed"}
+    with db_factory() as db:
+        assert db.get(Plan, plan_id).state == "paying"
+
+
 def test_uncertain_payout_intent_is_held_until_reconciliation(db_factory):
     plan_id = make_plan(db_factory)
 

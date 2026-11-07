@@ -371,6 +371,37 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
 .funding-footnote { margin: -4px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.6; }
 .status-uncertain { border-color: #e8c9c4; background: #fcf5f4; color: #8f382f; }
 .text-link { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; color: var(--green-dark); font-size: 11px; font-weight: 600; }
+.payouts-page { padding-bottom: 40px; }
+.payout-stats { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.status-success { border-color: #cbdccb; background: #f1f6f0; color: #2d6641; }
+.status-success > span { background: #3a8051; }
+.payout-pending { border-color: #e8dfcb; background: #faf7ef; color: #846729; }
+.payout-pending > span { background: #b68a37; }
+.payout-failed { border-color: #e9c9c4; background: #fcf5f4; color: #9a3a2e; }
+.payout-failed > span { background: #b44539; }
+.status-attention, .payout-attention { border-color: #e4c3a0; background: #fff7eb; color: #8a4e13; }
+.status-attention > span, .payout-attention > span { background: #b56a20; }
+.payout-action-panel .continue-copy p { margin-bottom: 0; }
+.payout-state-note { display: grid; gap: 4px; padding: 13px 15px; border: 1px solid #e8dfcb; background: #faf7ef; color: #76571f; font-size: 11px; line-height: 1.5; }
+.payout-state-attention { border-color: #e4c3a0; background: #fff7eb; color: #81440e; }
+.payout-reconcile-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface); }
+.payout-reconcile-row p { margin: 0; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
+.payout-batch { margin-top: 13px; border: 1px solid var(--line-strong); background: var(--surface); }
+.payout-batch-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 15px 9px; }
+.payout-batch-head h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; margin: 5px 0 0; font-size: 12px; font-weight: 600; }
+.payout-batch-head h3 code, .payout-item-id { color: #667166; font-family: var(--mono); font-size: 10px; overflow-wrap: anywhere; }
+.payout-batch-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 0 15px 12px; color: var(--ink-muted); font-size: 10px; }
+.payout-table { min-width: 880px; }
+.payout-table thead th:nth-child(1) { width: 21%; }
+.payout-table thead th:nth-child(2) { width: 15%; }
+.payout-table thead th:nth-child(3) { width: 11%; }
+.payout-table thead th:nth-child(4) { width: 20%; }
+.payout-table thead th:nth-child(5) { width: 15%; }
+.payout-table tbody th strong, .payout-table tbody th code { display: block; }
+.payout-table tbody th code { margin-top: 4px; color: #828a81; font-weight: 400; }
+.payout-error-note { display: block; max-width: 190px; margin-top: 5px; color: #8f382f; font-size: 9px; line-height: 1.4; }
+.empty-batch { margin: 0; padding: 13px 15px; color: var(--ink-muted); font-size: 11px; }
+.payout-data-note { margin: 12px 0 0; color: var(--ink-muted); font-size: 10px; line-height: 1.55; }
 @media (max-width: 760px) {
   .allocation-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .allocation-stats .summary-item { padding: 12px 14px; border-bottom: 1px solid var(--line); }
@@ -394,6 +425,21 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
   .approval-actions { width: 100%; }
   .approval-actions > .button { width: 100%; justify-content: center; }
   .funding-action-panel .approval-actions { width: 100%; }
+  .payout-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .payout-stats .summary-item:last-child { grid-column: auto; }
+  .payout-reconcile-row { align-items: stretch; flex-direction: column; }
+  .payout-reconcile-row .button { width: 100%; }
+  .payout-action-panel .approval-actions, .payout-action-panel .approval-actions > .button { width: 100%; }
+  .payout-batch-head { align-items: flex-start; flex-direction: column; }
+  .payout-table { display: block; min-width: 0; }
+  .payout-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .payout-table tbody { display: grid; gap: 8px; }
+  .payout-table tbody tr { display: grid; gap: 9px; padding: 12px 13px; border: 1px solid var(--line); background: var(--surface); }
+  .payout-table tbody th, .payout-table tbody td { display: grid; grid-template-columns: 103px minmax(0, 1fr); gap: 8px; min-width: 0; padding: 0; border: 0; font-size: 11px; }
+  .payout-table tbody th { display: block; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .payout-table tbody th::before { display: block; margin-bottom: 7px; color: #7e877d; font-family: var(--mono); font-size: 8px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; content: attr(data-label); }
+  .payout-table tbody td::before { color: #7e877d; font-family: var(--mono); font-size: 8px; letter-spacing: .04em; text-transform: uppercase; content: attr(data-label); }
+  .payout-table .status-pill { width: fit-content; }
 }
 @media (max-width: 430px) {
   .allocation-summary { padding-top: 16px; }

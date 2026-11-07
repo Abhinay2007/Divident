@@ -3,6 +3,7 @@ import { useState } from 'react'
 import Discovery from './Discovery'
 import AllocationReview from './AllocationReview'
 import FundScreen from './FundScreen'
+import PayoutsScreen from './Payouts'
 
 const navItems = [
   { label: 'Overview', icon: 'grid', href: '/' },
@@ -31,14 +32,17 @@ export default function App() {
   const route = window.location.pathname.match(/^\/discovery(?:\/([^/]+))?\/?$/)
   const allocationRoute = window.location.pathname.match(/^\/allocation\/([^/]+)\/?$/)
   const fundRoute = window.location.pathname.match(/^\/fund\/([^/]+)\/?$/)
+  const payoutsRoute = window.location.pathname.match(/^\/payouts\/([^/]+)\/?$/)
   const isDiscovery = !!route
   const isAllocation = !!allocationRoute
   const sessionId = route?.[1]
   const allocationId = allocationRoute?.[1]
   const fundId = fundRoute?.[1]
-  const planId = allocationId || fundId
+  const payoutsId = payoutsRoute?.[1]
+  const planId = allocationId || fundId || payoutsId
   const isFund = !!fundId
-  const currentPage = isDiscovery ? 'Discovery' : isAllocation ? 'Allocations' : isFund ? 'Funding' : 'Overview'
+  const isPayouts = !!payoutsId
+  const currentPage = isDiscovery ? 'Discovery' : isAllocation ? 'Allocations' : isFund ? 'Funding' : isPayouts ? 'Payouts' : 'Overview'
 
   return (
     <div className="app-shell">
@@ -50,8 +54,8 @@ export default function App() {
         <div className="workspace-label">WORKSPACE</div>
         <button className="mobile-menu" type="button" aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={menuOpen} aria-controls="primary-navigation" onClick={() => setMenuOpen(!menuOpen)}><Icon name={menuOpen ? 'close' : 'menu'}/></button>
         <nav className={`primary-nav${menuOpen ? ' menu-open' : ''}`} id="primary-navigation">
-          {navItems.map(({ label, icon, href }) => (href || (label === 'Allocations' && planId)) ? (
-            <a key={label} className={`nav-link${currentPage === label || (isFund && label === 'Allocations') ? ' active' : ''}`} href={href || `/allocation/${planId}`} aria-current={currentPage === label || (isFund && label === 'Allocations') ? 'page' : undefined} onClick={() => setMenuOpen(false)}><Icon name={icon}/><span>{label}</span></a>
+          {navItems.map(({ label, icon, href }) => (href || (label === 'Allocations' && planId) || (label === 'Payouts' && planId)) ? (
+            <a key={label} className={`nav-link${currentPage === label || (isFund && label === 'Allocations') ? ' active' : ''}`} href={href || (label === 'Payouts' ? `/payouts/${planId}` : `/allocation/${planId}`)} aria-current={currentPage === label || (isFund && label === 'Allocations') ? 'page' : undefined} onClick={() => setMenuOpen(false)}><Icon name={icon}/><span>{label}</span></a>
           ) : (
             <span key={label} className="nav-link nav-soon" aria-disabled="true"><Icon name={icon}/><span>{label}</span><span className="soon-dot" title="Available in a later workflow step"/></span>
           ))}
@@ -69,7 +73,7 @@ export default function App() {
           <div className="topbar-right"><span className="sandbox-pill"><span/>Sandbox environment</span><button className="help-button" type="button" aria-label="About the sandbox">?</button></div>
         </header>
         <main id="main" className={`main-content${isDiscovery ? ' main-content-discovery' : ''}`}>
-          {isDiscovery ? <Discovery sessionId={sessionId}/> : allocationId ? <AllocationReview planId={allocationId}/> : fundId ? <FundScreen planId={fundId}/> : <>
+          {isDiscovery ? <Discovery sessionId={sessionId}/> : allocationId ? <AllocationReview planId={allocationId}/> : fundId ? <FundScreen planId={fundId}/> : payoutsId ? <PayoutsScreen planId={payoutsId}/> : <>
           <div className="page-heading">
             <div><div className="eyebrow">OPEN-SOURCE FUNDING</div><h1>Good software deserves<br className="desktop-break"/> a sustainable future.</h1><p className="intro">See what your system depends on. Decide what to fund. Keep every dollar explainable.</p></div>
             <span className="date-stamp">DEBIAN · UBUNTU</span>
