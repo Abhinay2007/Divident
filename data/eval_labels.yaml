@@ -1,0 +1,7 @@
+schema: 1
+synthetic_demo_fixture: true
+expected_no_upstream:
+- linux-signed-amd64
+expected_unmapped:
+- libxcb-doc
+expected_project_count: 16

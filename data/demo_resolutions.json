@@ -1,0 +1,227 @@
+{
+  "projects": [
+    {
+      "binary_count": 3,
+      "source_names": [
+        "dpkg"
+      ],
+      "upstream_key": "git.dpkg.org/cgit/dpkg/dpkg"
+    },
+    {
+      "binary_count": 2,
+      "source_names": [
+        "linux"
+      ],
+      "upstream_key": "git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux"
+    },
+    {
+      "binary_count": 2,
+      "source_names": [
+        "bash"
+      ],
+      "upstream_key": "git.savannah.gnu.org/git/bash"
+    },
+    {
+      "binary_count": 1,
+      "source_names": [
+        "coreutils"
+      ],
+      "upstream_key": "git.savannah.gnu.org/git/coreutils"
+    },
+    {
+      "binary_count": 3,
+      "source_names": [
+        "curl"
+      ],
+      "upstream_key": "github.com/curl/curl"
+    },
+    {
+      "binary_count": 2,
+      "source_names": [
+        "zlib"
+      ],
+      "upstream_key": "github.com/madler/zlib"
+    },
+    {
+      "binary_count": 2,
+      "source_names": [
+        "openssl"
+      ],
+      "upstream_key": "github.com/openssl/openssl"
+    },
+    {
+      "binary_count": 3,
+      "source_names": [
+        "sqlite"
+      ],
+      "upstream_key": "github.com/sqlite/sqlite"
+    },
+    {
+      "binary_count": 3,
+      "source_names": [
+        "systemd"
+      ],
+      "upstream_key": "github.com/systemd/systemd"
+    },
+    {
+      "binary_count": 4,
+      "source_names": [
+        "libxcb"
+      ],
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/libxcb"
+    },
+    {
+      "binary_count": 1,
+      "source_names": [
+        "xcb-util"
+      ],
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util"
+    },
+    {
+      "binary_count": 1,
+      "source_names": [
+        "xcb-util-image"
+      ],
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util-image"
+    },
+    {
+      "binary_count": 1,
+      "source_names": [
+        "xcb-util-keysyms"
+      ],
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util-keysyms"
+    },
+    {
+      "binary_count": 1,
+      "source_names": [
+        "xcb-util-wm"
+      ],
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util-wm"
+    },
+    {
+      "binary_count": 3,
+      "source_names": [
+        "apt"
+      ],
+      "upstream_key": "salsa.debian.org/apt-team/apt"
+    },
+    {
+      "binary_count": 3,
+      "source_names": [
+        "glibc"
+      ],
+      "upstream_key": "sourceware.org/git/glibc"
+    }
+  ],
+  "resolutions": [
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "apt",
+      "upstream_key": "salsa.debian.org/apt-team/apt"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "bash",
+      "upstream_key": "git.savannah.gnu.org/git/bash"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "coreutils",
+      "upstream_key": "git.savannah.gnu.org/git/coreutils"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "curl",
+      "upstream_key": "github.com/curl/curl"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "dpkg",
+      "upstream_key": "git.dpkg.org/cgit/dpkg/dpkg"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "glibc",
+      "upstream_key": "sourceware.org/git/glibc"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "libxcb",
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/libxcb"
+    },
+    {
+      "method": "none",
+      "outcome": "unmapped",
+      "source_name": "libxcb-doc",
+      "upstream_key": null
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "linux",
+      "upstream_key": "git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux"
+    },
+    {
+      "method": "none",
+      "outcome": "no_upstream",
+      "source_name": "linux-signed-amd64",
+      "upstream_key": null
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "openssl",
+      "upstream_key": "github.com/openssl/openssl"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "sqlite",
+      "upstream_key": "github.com/sqlite/sqlite"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "systemd",
+      "upstream_key": "github.com/systemd/systemd"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "xcb-util",
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "xcb-util-image",
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util-image"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "xcb-util-keysyms",
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util-keysyms"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "xcb-util-wm",
+      "upstream_key": "gitlab.freedesktop.org/xorg/lib/xcb-util-wm"
+    },
+    {
+      "method": "repo_url",
+      "outcome": "resolved",
+      "source_name": "zlib",
+      "upstream_key": "github.com/madler/zlib"
+    }
+  ],
+  "synthetic_demo_facts": true
+}

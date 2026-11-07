@@ -1,20 +1,187 @@
 {
   "sources": {
-    "apt": {"repository_url": "https://salsa.debian.org/apt-team/apt.git", "partial": true},
-    "bash": {"repository_url": "https://git.savannah.gnu.org/git/bash.git", "partial": true},
-    "coreutils": {"repository_url": "https://git.savannah.gnu.org/git/coreutils.git", "partial": true},
-    "dpkg": {"repository_url": "https://git.dpkg.org/cgit/dpkg/dpkg.git", "partial": true},
-    "glibc": {"repository_url": "https://sourceware.org/git/glibc.git", "partial": true},
-    "systemd": {"repository_url": "https://github.com/systemd/systemd.git", "partial": true},
-    "libxcb": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
-    "xcb-util-cursor": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
-    "xcb-util-wm": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
-    "xcb-util-image": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
-    "xcb-util-keysyms": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
-    "xcb-util-renderutil": {"repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git", "partial": true},
-    "libxcb-doc": {"partial": true},
-    "libc": {"repository_url": "https://sourceware.org/git/glibc.git", "partial": true},
-    "linux-signed-amd64": {"partial": true},
-    "linux-latest": {"partial": true}
-  }
+    "apt": {
+      "github": {
+        "archived": false,
+        "committers_12m": 8,
+        "full_name": "salsa.debian.org/apt-team/apt",
+        "funding_yml": true,
+        "last_commit": "2026-10-01"
+      },
+      "partial": false,
+      "repository_url": "https://salsa.debian.org/apt-team/apt.git"
+    },
+    "bash": {
+      "github": {
+        "archived": false,
+        "committers_12m": 1,
+        "full_name": "git.savannah.gnu.org/git/bash",
+        "funding_yml": false,
+        "last_commit": "2026-09-15"
+      },
+      "partial": false,
+      "repository_url": "https://git.savannah.gnu.org/git/bash.git"
+    },
+    "coreutils": {
+      "github": {
+        "archived": false,
+        "committers_12m": 2,
+        "full_name": "git.savannah.gnu.org/git/coreutils",
+        "funding_yml": false,
+        "last_commit": "2024-01-10"
+      },
+      "partial": false,
+      "repository_url": "https://git.savannah.gnu.org/git/coreutils.git"
+    },
+    "curl": {
+      "github": {
+        "archived": false,
+        "committers_12m": 3,
+        "full_name": "github.com/curl/curl",
+        "funding_yml": true,
+        "last_commit": "2026-09-30"
+      },
+      "partial": false,
+      "repository_url": "https://github.com/curl/curl.git"
+    },
+    "dpkg": {
+      "github": {
+        "archived": false,
+        "committers_12m": 4,
+        "full_name": "git.dpkg.org/cgit/dpkg/dpkg",
+        "funding_yml": true,
+        "last_commit": "2026-08-01"
+      },
+      "partial": false,
+      "repository_url": "https://git.dpkg.org/cgit/dpkg/dpkg.git"
+    },
+    "glibc": {
+      "github": {
+        "archived": false,
+        "committers_12m": 1,
+        "full_name": "sourceware.org/git/glibc",
+        "funding_yml": false,
+        "last_commit": "2025-01-01"
+      },
+      "partial": false,
+      "repository_url": "https://sourceware.org/git/glibc.git"
+    },
+    "libxcb": {
+      "github": {
+        "archived": false,
+        "committers_12m": 2,
+        "full_name": "gitlab.freedesktop.org/xorg/lib/libxcb",
+        "funding_yml": false,
+        "last_commit": "2025-07-04"
+      },
+      "partial": false,
+      "repository_url": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git"
+    },
+    "libxcb-doc": {
+      "partial": true
+    },
+    "linux": {
+      "github": {
+        "archived": false,
+        "committers_12m": 50,
+        "full_name": "git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux",
+        "funding_yml": false,
+        "last_commit": "2026-10-15"
+      },
+      "partial": false,
+      "repository_url": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git"
+    },
+    "linux-signed-amd64": {
+      "partial": true
+    },
+    "openssl": {
+      "github": {
+        "archived": false,
+        "committers_12m": 8,
+        "full_name": "github.com/openssl/openssl",
+        "funding_yml": true,
+        "last_commit": "2026-11-01"
+      },
+      "partial": false,
+      "repository_url": "https://github.com/openssl/openssl.git"
+    },
+    "sqlite": {
+      "github": {
+        "archived": false,
+        "committers_12m": 1,
+        "full_name": "github.com/sqlite/sqlite",
+        "funding_yml": false,
+        "last_commit": "2026-07-01"
+      },
+      "partial": false,
+      "repository_url": "https://github.com/sqlite/sqlite.git"
+    },
+    "systemd": {
+      "github": {
+        "archived": false,
+        "committers_12m": 20,
+        "full_name": "github.com/systemd/systemd",
+        "funding_yml": true,
+        "last_commit": "2026-10-20"
+      },
+      "partial": false,
+      "repository_url": "https://github.com/systemd/systemd.git"
+    },
+    "xcb-util": {
+      "github": {
+        "archived": true,
+        "committers_12m": 1,
+        "full_name": "gitlab.freedesktop.org/xorg/lib/xcb-util",
+        "funding_yml": false,
+        "last_commit": "2024-05-01"
+      },
+      "partial": false,
+      "repository_url": "https://gitlab.freedesktop.org/xorg/lib/xcb-util.git"
+    },
+    "xcb-util-image": {
+      "github": {
+        "archived": false,
+        "committers_12m": 1,
+        "full_name": "gitlab.freedesktop.org/xorg/lib/xcb-util-image",
+        "funding_yml": false,
+        "last_commit": "2025-01-01"
+      },
+      "partial": false,
+      "repository_url": "https://gitlab.freedesktop.org/xorg/lib/xcb-util-image.git"
+    },
+    "xcb-util-keysyms": {
+      "github": {
+        "archived": false,
+        "committers_12m": 1,
+        "full_name": "gitlab.freedesktop.org/xorg/lib/xcb-util-keysyms",
+        "funding_yml": false,
+        "last_commit": "2026-09-01"
+      },
+      "partial": false,
+      "repository_url": "https://gitlab.freedesktop.org/xorg/lib/xcb-util-keysyms.git"
+    },
+    "xcb-util-wm": {
+      "github": {
+        "archived": false,
+        "committers_12m": 2,
+        "full_name": "gitlab.freedesktop.org/xorg/lib/xcb-util-wm",
+        "funding_yml": false,
+        "last_commit": "2026-08-01"
+      },
+      "partial": false,
+      "repository_url": "https://gitlab.freedesktop.org/xorg/lib/xcb-util-wm.git"
+    },
+    "zlib": {
+      "github": {
+        "archived": true,
+        "committers_12m": 1,
+        "full_name": "github.com/madler/zlib",
+        "funding_yml": false,
+        "last_commit": "2020-01-01"
+      },
+      "partial": false,
+      "repository_url": "https://github.com/madler/zlib.git"
+    }
+  },
+  "synthetic_demo_facts": true
 }

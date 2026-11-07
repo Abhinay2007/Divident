@@ -1,0 +1,55 @@
+schema: 1
+identities_are_synthetic: true
+maintainers:
+- upstream_key: salsa.debian.org/apt-team/apt
+  display_name: Synthetic demo maintainer (apt)
+  email: demo+apt@example.invalid
+  opted_in: true
+- upstream_key: git.savannah.gnu.org/git/bash
+  display_name: Synthetic demo maintainer (bash)
+  email: demo+bash@example.invalid
+  opted_in: true
+- upstream_key: git.savannah.gnu.org/git/coreutils
+  display_name: Synthetic demo maintainer (coreutils)
+  email: demo+coreutils@example.invalid
+  opted_in: false
+- upstream_key: git.dpkg.org/cgit/dpkg/dpkg
+  display_name: Synthetic demo maintainer (dpkg)
+  email: demo+dpkg@example.invalid
+  opted_in: true
+- upstream_key: sourceware.org/git/glibc
+  display_name: Synthetic demo maintainer (glibc)
+  email: demo+glibc@example.invalid
+  opted_in: true
+- upstream_key: github.com/systemd/systemd
+  display_name: Synthetic demo maintainer (systemd)
+  email: demo+systemd@example.invalid
+  opted_in: true
+- upstream_key: github.com/curl/curl
+  display_name: Synthetic demo maintainer (curl)
+  email: demo+curl@example.invalid
+  opted_in: true
+- upstream_key: github.com/openssl/openssl
+  display_name: Synthetic demo maintainer (openssl)
+  email: demo+openssl@example.invalid
+  opted_in: false
+- upstream_key: github.com/sqlite/sqlite
+  display_name: Synthetic demo maintainer (sqlite)
+  email: demo+sqlite@example.invalid
+  opted_in: true
+- upstream_key: gitlab.freedesktop.org/xorg/lib/libxcb
+  display_name: Synthetic demo maintainer (libxcb)
+  email: demo+libxcb@example.invalid
+  opted_in: false
+- upstream_key: gitlab.freedesktop.org/xorg/lib/xcb-util
+  display_name: Synthetic demo maintainer (xcb-util)
+  email: demo+xcb-util@example.invalid
+  opted_in: true
+- upstream_key: gitlab.freedesktop.org/xorg/lib/xcb-util-image
+  display_name: Synthetic demo maintainer (xcb-util-image)
+  email: demo+xcb-util-image@example.invalid
+  opted_in: false
+- upstream_key: gitlab.freedesktop.org/xorg/lib/xcb-util-keysyms
+  display_name: Synthetic demo maintainer (xcb-util-keysyms)
+  email: demo+xcb-util-keysyms@example.invalid
+  opted_in: true

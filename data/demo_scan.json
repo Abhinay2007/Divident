@@ -1,0 +1,81 @@
+{
+  "binary_count": 37,
+  "origin": "synthetic-demo",
+  "schema": 1,
+  "source_count": 18,
+  "sources": {
+    "apt": [
+      "apt",
+      "apt-utils",
+      "libapt-pkg-dev"
+    ],
+    "bash": [
+      "bash",
+      "bash-builtins"
+    ],
+    "coreutils": [
+      "coreutils"
+    ],
+    "curl": [
+      "curl",
+      "libcurl4",
+      "libcurl4-openssl-dev"
+    ],
+    "dpkg": [
+      "dpkg",
+      "dpkg-dev",
+      "libdpkg-perl"
+    ],
+    "glibc": [
+      "libc-bin",
+      "libc-dev-bin",
+      "libc6"
+    ],
+    "libxcb": [
+      "libxcb-render0",
+      "libxcb-xfixes0",
+      "libxcb1",
+      "libxcb1-dev"
+    ],
+    "libxcb-doc": [
+      "libxcb-doc"
+    ],
+    "linux": [
+      "linux-headers-amd64",
+      "linux-image-amd64"
+    ],
+    "linux-signed-amd64": [
+      "linux-signed-amd64"
+    ],
+    "openssl": [
+      "libssl3",
+      "openssl"
+    ],
+    "sqlite": [
+      "libsqlite3-0",
+      "libsqlite3-dev",
+      "sqlite3"
+    ],
+    "systemd": [
+      "libsystemd0",
+      "systemd",
+      "systemd-sysv"
+    ],
+    "xcb-util": [
+      "libxcb-util1"
+    ],
+    "xcb-util-image": [
+      "libxcb-image0"
+    ],
+    "xcb-util-keysyms": [
+      "libxcb-keysyms1"
+    ],
+    "xcb-util-wm": [
+      "libxcb-icccm4"
+    ],
+    "zlib": [
+      "zlib1g",
+      "zlib1g-dev"
+    ]
+  }
+}

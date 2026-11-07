@@ -29,6 +29,7 @@ from .services import SessionService
 from .payments.fake import FakeProvider
 from .payments.paypal import PayPalProvider
 from .services.payment_service import PaymentService
+from .demo import seed_demo_if_empty
 
 
 def create_app(
@@ -55,6 +56,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         initialize_database(app_engine)
+        if configured.DEMO_SEED_ON_BOOT:
+            seed_demo_if_empty(factory, configured.DEMO_SANDBOX_RECIPIENTS_FILE)
         try:
             yield
         finally:
