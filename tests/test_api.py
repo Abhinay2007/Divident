@@ -3,9 +3,9 @@ import httpx
 from sqlalchemy import select
 
 from dividend.config import Settings
-from dividend.db import create_database_engine, create_session_factory
+from dividend.db import create_database_engine, create_session_factory, initialize_database
 from dividend.main import create_app
-from dividend.models import Session as SessionRecord, SourceResolution, UpstreamProject
+from dividend.models import Plan, Session as SessionRecord, SourceResolution, UpstreamProject
 
 
 def settings(tmp_path):
@@ -80,6 +80,44 @@ def test_api_session_validation_request_id_and_health_startup(tmp_path):
         assert too_large.status_code == 413
         assert too_large.json()["code"] == "request_too_large"
     asyncio.run(exercise())
+    engine.dispose()
+
+
+def test_api_approval_returns_charge_error_without_hanging(tmp_path):
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'approval.db'}")
+    factory = create_session_factory(engine)
+    app = create_app(settings(tmp_path), engine=engine, session_factory=factory)
+    initialize_database(engine)
+    with factory.begin() as db:
+        session = SessionRecord(mode="upload", status="ready", source_names=[], source_count=0)
+        db.add(session)
+        db.flush()
+        plan = Plan(
+            session_id=session.id,
+            state="draft",
+            budget_cents=1000,
+            payable_total_cents=1000,
+            reserved_total_cents=0,
+            est_payout_fees_cents=None,
+            charge_cents=None,
+        )
+        db.add(plan)
+        db.flush()
+        plan_id = plan.id
+
+    async def exercise():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(f"/api/plans/{plan_id}/approve")
+                assert response.status_code == 422
+                assert response.json()["code"] == "charge_unavailable"
+
+    asyncio.run(exercise())
+    with factory() as db:
+        persisted = db.get(Plan, plan_id)
+        assert (persisted.state, persisted.order_attempt) == ("draft", 0)
     engine.dispose()
 
 

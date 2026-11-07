@@ -20,7 +20,7 @@ async def get_db(request: Request):
         db.close()
 
 
-def get_payment_service(request: Request):
+async def get_payment_service(request: Request):
     service = getattr(request.app.state, "payment_service", None)
     if service is None:
         raise PaymentProviderError("Payment provider is unavailable", code="payment_provider_unavailable")
