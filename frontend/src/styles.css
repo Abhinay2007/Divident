@@ -316,3 +316,85 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
   .plan-form .button { grid-column: auto; }
 }
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } .progress-track > span { transition: none; } }
+
+/* Allocation review extends the existing data-table and finance tokens. */
+.status-draft { border-color: #e8d9b8; background: #fbf7ed; color: #76571f; }
+.status-draft > span { background: #bd8a30; }
+.allocation-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.allocation-stats .summary-item { min-width: 0; padding-right: 13px; padding-left: 13px; }
+.allocation-stats .summary-item strong { font-size: 13px; }
+.allocation-summary-note { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 -21px; padding: 11px 21px; border-top: 1px solid var(--line); color: #697269; font-size: 11px; line-height: 1.5; }
+.allocation-summary-note strong { color: #354035; }
+.allocation-review-table { min-width: 800px; }
+.allocation-review-table thead th:nth-child(1) { width: 23%; }
+.allocation-review-table thead th:nth-child(2) { width: 13%; }
+.allocation-review-table thead th:nth-child(3) { width: 18%; }
+.allocation-review-table thead th:nth-child(4) { width: 46%; }
+.allocation-project { display: grid; gap: 5px; min-width: 170px; }
+.allocation-project > strong { color: #303830; font-size: 12px; }
+.allocation-project > code { color: #747e73; font-weight: 400; overflow-wrap: anywhere; }
+.allocation-project > a { color: var(--green); font-family: var(--mono); font-size: 10px; font-weight: 400; overflow-wrap: anywhere; text-decoration: none; }
+.allocation-project > a:hover { text-decoration: underline; }
+.maintainer-line { margin-top: 5px; color: #4d584d; font-size: 11px; font-weight: 500; overflow-wrap: anywhere; }
+.eligibility-pill { width: fit-content; padding: 4px 6px; border: 1px solid var(--line); background: var(--surface-soft); color: #686f68; font-size: 9px; font-weight: 600; line-height: 1.4; }
+.eligibility-pill.eligible { border-color: #cbdccb; background: #f1f6f0; color: #2d6641; }
+.eligibility-pill.reserved { border-color: #e8dfcb; background: #faf7ef; color: #846729; }
+.allocation-amount { color: #303830; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.allocation-split { display: grid; gap: 7px; min-width: 130px; font-size: 10px; }
+.allocation-split span { display: flex; justify-content: space-between; gap: 8px; color: #747d74; }
+.allocation-split strong { color: #384238; font-family: var(--mono); font-size: 10px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.allocation-reason { margin: 0; color: #596359; font-size: 11px; line-height: 1.55; }
+.signal-details { margin-top: 9px; border-top: 1px solid #edf0eb; }
+.signal-details summary { display: flex; min-height: 44px; align-items: center; color: var(--green-dark); font-size: 10px; font-weight: 600; cursor: pointer; }
+.signal-details summary:hover { text-decoration: underline; }
+.signal-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px 12px; margin: 3px 0 10px; }
+.signal-grid > div { min-width: 0; }
+.signal-grid dt { color: #828b82; font-size: 9px; }
+.signal-grid dd { margin: 2px 0 0; color: #414b41; font-size: 10px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.evidence-source { display: grid; gap: 5px; padding: 9px 0; border-top: 1px solid #edf0eb; color: #697269; font-size: 10px; line-height: 1.5; }
+.evidence-source > strong { color: #394339; font-family: var(--mono); font-size: 10px; }
+.evidence-source code { overflow-wrap: anywhere; }
+.evidence-source ul { margin: 0; padding-left: 17px; }
+.budget-adjust-form { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1fr) auto; align-items: end; gap: 10px; }
+.budget-adjust-form label { display: grid; gap: 6px; color: #5d675d; font-size: 10px; font-weight: 600; }
+.budget-adjust-form input { width: 100%; min-width: 0; min-height: 44px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 3px; background: white; color: var(--ink); font: inherit; font-size: 12px; }
+.budget-adjust-form input:focus-visible { outline: 3px solid #6a9d78; outline-offset: 2px; }
+.budget-adjust-form .button { min-height: 44px; white-space: nowrap; }
+.budget-adjust-form .form-error, .budget-adjust-form .form-success, .budget-adjust-form .discovery-error { grid-column: 1 / -1; }
+.form-success { margin: 0; color: var(--green-dark); font-size: 11px; line-height: 1.5; }
+.approval-actions { display: grid; justify-items: start; align-content: center; gap: 10px; }
+.approval-actions .button { min-height: 44px; }
+.approval-panel .continue-copy p { margin-bottom: 0; }
+@media (max-width: 760px) {
+  .allocation-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .allocation-stats .summary-item { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .allocation-stats .summary-item:nth-child(2n) { border-right: 0; }
+  .allocation-stats .summary-item:last-child { grid-column: 1 / -1; border-bottom: 0; }
+  .allocation-summary-note { margin-right: -15px; margin-left: -15px; padding-right: 15px; padding-left: 15px; }
+  .allocation-review-table { display: block; min-width: 0; }
+  .allocation-review-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .allocation-review-table tbody { display: grid; gap: 9px; }
+  .allocation-review-table tbody tr { display: grid; gap: 11px; padding: 13px; border: 1px solid var(--line); background: var(--surface); }
+  .allocation-review-table tbody th, .allocation-review-table tbody td { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; min-width: 0; padding: 0; border: 0; font-size: 11px; }
+  .allocation-review-table tbody th::before, .allocation-review-table tbody td::before { content: attr(data-label); color: #7e877d; font-family: var(--mono); font-size: 8px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; }
+  .allocation-review-table tbody th { display: block; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .allocation-review-table tbody th::before { display: block; margin-bottom: 8px; }
+  .allocation-project { min-width: 0; }
+  .allocation-review-table tbody td:last-child { display: block; }
+  .allocation-review-table tbody td:last-child::before { display: block; margin-bottom: 7px; }
+  .signal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .budget-adjust-form { grid-template-columns: 1fr 1fr; }
+  .budget-adjust-form .button { grid-column: 1 / -1; }
+  .approval-actions { width: 100%; }
+  .approval-actions > .button { width: 100%; justify-content: center; }
+}
+@media (max-width: 430px) {
+  .allocation-summary { padding-top: 16px; }
+  .allocation-stats .summary-item { padding: 11px 9px; }
+  .allocation-stats .summary-item strong { font-size: 12px; }
+  .allocation-summary-note { margin-right: -15px; margin-left: -15px; padding: 10px 13px; }
+  .allocation-review-table tbody th, .allocation-review-table tbody td { grid-template-columns: 102px minmax(0, 1fr); gap: 8px; }
+  .budget-adjust-form { grid-template-columns: 1fr; }
+  .budget-adjust-form .button { grid-column: auto; }
+}
+@media (prefers-reduced-motion: reduce) { .signal-details summary { scroll-behavior: auto; } }

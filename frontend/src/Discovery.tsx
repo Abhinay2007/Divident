@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { ApiError, createDemoSession, createPlan, getPlan, getProjects, getSession, type Project, type SourceDetail } from './api'
+import { ApiError, createDemoSession, createPlan, getProjects, getSession, type Project, type SourceDetail } from './api'
 
 function ErrorMessage({ error, retry, message }: { error: Error; retry?: () => void; message?: string }) {
   const requestId = error instanceof ApiError ? error.requestId : undefined
@@ -14,10 +14,6 @@ function stateLabel(value: string) {
 function localToday() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
-
-function money(cents: number) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
 }
 
 function budgetToCents(value: string) {
@@ -50,7 +46,7 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
   })
   const plan = useMutation({
     mutationFn: ({ cents, date }: { cents: number; date: string }) => createPlan(sessionId!, cents, date),
-    onSuccess: ({ id }) => window.location.assign(`/allocation/${id}`),
+    onSuccess: ({ id }, values) => window.location.assign(`/allocation/${id}?evaluation_date=${encodeURIComponent(values.date)}`),
   })
 
   function submitPlan(event: FormEvent<HTMLFormElement>) {
@@ -115,24 +111,6 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
       <button className="button button-primary" type="submit" disabled={plan.isPending}>{plan.isPending ? 'Preparing plan…' : 'Continue to allocation'}<span aria-hidden="true">→</span></button>
       {formError && <p className="form-error" role="alert">{formError}</p>}{plan.isError && <ErrorMessage error={plan.error} message={plan.error instanceof ApiError && plan.error.status === 500 ? 'The server could not build a plan with this budget. Try a larger budget.' : undefined} retry={() => { try { plan.mutate({ cents: budgetToCents(budget), date: evaluationDate }) } catch (error) { setFormError(error instanceof Error ? error.message : 'Check the budget and date, then try again.') } }}/>} 
     </form>}</section>}
-  </section>
-}
-
-export function AllocationHandoff({ planId }: { planId: string }) {
-  const plan = useQuery({ queryKey: ['plan', planId], queryFn: () => getPlan(planId) })
-  if (plan.isPending) return <section className="discovery-page"><a className="back-link" href="/discovery">← Discovery</a><div className="discovery-heading"><div className="eyebrow">ALLOCATION</div><h1>Loading plan</h1></div><div className="skeleton table-skeleton"/></section>
-  if (plan.isError) return <section className="discovery-page"><a className="back-link" href="/discovery">← Discovery</a><div className="discovery-heading"><div className="eyebrow">ALLOCATION</div><h1>Plan unavailable</h1></div><ErrorMessage error={plan.error} retry={() => { void plan.refetch() }}/></section>
-  const record = plan.data
-  return <section className="discovery-page">
-    <a className="back-link" href={`/discovery/${record.session_id}`}>← Package discovery</a>
-    <div className="discovery-heading discovery-heading-session"><div><div className="eyebrow">ALLOCATION</div><h1>Allocation plan</h1><p>Drafted from the upstream projects resolved in your discovery session.</p></div><span className="status-pill"><span/>{stateLabel(record.state)}</span></div>
-    <section className="session-panel" aria-label="Allocation plan summary">
-      <div className="session-panel-head"><div><span className="section-kicker">PLAN</span><h2>Budget summary</h2></div><code className="session-id">{record.id}</code></div>
-      <div className="session-stats plan-stats"><Summary label="Budget" value={money(record.budget_cents)}/><Summary label="Payable" value={money(record.payable_total_cents)}/><Summary label="Reserved" value={money(record.reserved_total_cents)}/><Summary label="Projects" value={record.lines.length.toLocaleString()}/></div>
-    </section>
-    <section className="source-section" aria-labelledby="plan-lines-title"><div className="source-section-heading"><div><span className="section-kicker">PLAN LINES</span><h2 id="plan-lines-title">Project allocations</h2></div><span className="row-count">{record.lines.length.toLocaleString()} projects</span></div>
-      <div className="table-scroll" role="region" aria-label="Project allocations" tabIndex={0}><table className="source-table allocation-table"><thead><tr><th scope="col">Upstream project</th><th scope="col">Allocated</th><th scope="col">Payable</th><th scope="col">Reserved</th><th scope="col">Reason</th></tr></thead><tbody>{record.lines.map((line) => <tr key={line.upstream_key}><th scope="row"><strong>{line.display_name}</strong><code>{line.upstream_key}</code></th><td data-label="Allocated">{money(line.amount_cents)}</td><td data-label="Payable">{money(line.payable_cents)}</td><td data-label="Reserved">{money(line.reserved_cents)}</td><td data-label="Reason">{line.reason}</td></tr>)}</tbody></table></div>
-    </section>
   </section>
 }
 

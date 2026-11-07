@@ -198,6 +198,15 @@ def test_end_to_end_api_intake_to_plan_budget_adjustment_and_approval(tmp_path):
         assert adjusted.json()["budget_cents"] == 1100
         assert sum(line["amount_cents"] for line in adjusted.json()["lines"]) == 1100
 
+        infeasible = await client.patch(
+            f"/api/plans/{plan['id']}/budget",
+            json={"budget_cents": 100, "evaluation_date": "2026-11-06"},
+        )
+        assert infeasible.status_code == 422
+        assert infeasible.json()["code"] == "allocation_error"
+        assert infeasible.json()["request_id"]
+        assert (await client.get(f"/api/plans/{plan['id']}")).json()["budget_cents"] == 1100
+
         approved = await client.post(f"/api/plans/{plan['id']}/approve")
         assert approved.status_code == 422, approved.text
         assert approved.json()["code"] == "charge_unavailable"

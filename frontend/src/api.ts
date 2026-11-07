@@ -24,6 +24,15 @@ export type Project = {
   binary_count: number
   source_names: string[]
   payability: string
+  reason_summary: string
+  maintainer_name: string | null
+  need_signals: {
+    archived: boolean | null
+    last_commit: string | null
+    committers_12m: number | null
+    funding_yml: boolean | null
+    partial: boolean
+  }
 }
 
 export type Projects = {
@@ -41,11 +50,31 @@ export type Plan = {
   payable_total_cents: number
   reserved_total_cents: number
   est_payout_fees_cents: number | null
-  lines: { upstream_key: string; display_name: string; amount_cents: number; payable_cents: number; reserved_cents: number; reason: string }[]
+  charge_cents: number | null
+  order_id: string | null
+  frozen_at: string | null
+  money_summary: { charged_now_cents: number | null; pledged_cents: number; fee_estimate_cents: number | null }
+  lines: {
+    upstream_key: string
+    display_name: string
+    amount_cents: number
+    payable_cents: number
+    reserved_cents: number
+    payability: string
+    reason: string
+    facts_snapshot: {
+      normalized: Project['need_signals'] & { binary_count: number }
+      sources: {
+        source_name: string
+        repository_url: string | null
+        resolution: { method: string; evidence: { field: string; value: string }[] | null }
+      }[]
+    } | null
+  }[]
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly requestId?: string, readonly status?: number) {
+  constructor(message: string, readonly requestId?: string, readonly status?: number, readonly code?: string) {
     super(message)
     this.name = 'ApiError'
   }
@@ -57,12 +86,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const detail = typeof body.detail === 'string' ? body.detail : body.message
     const code = typeof body.code === 'string' ? body.code : undefined
+    const knownMessage = code === 'allocation_error'
+      ? 'The allocation rules could not fit this budget. Choose another amount and try again.'
+      : code === 'charge_unavailable'
+        ? 'Approval is unavailable because the required payment fee inputs are not measured. No order was created.'
+        : undefined
     throw new ApiError(
-      typeof detail === 'string' ? detail : code === 'allocation_error'
-        ? 'The allocation rules could not distribute this budget. Increase it and retry.'
-        : `Request failed (${response.status}). Try again.`,
+      knownMessage || (typeof detail === 'string' ? detail : `Request failed (${response.status}). Try again.`),
       typeof body.request_id === 'string' ? body.request_id : undefined,
       response.status,
+      code,
     )
   }
   return body as T
@@ -94,4 +127,18 @@ export function createPlan(sessionId: string, budgetCents: number, evaluationDat
 
 export function getPlan(id: string) {
   return request<Plan>(`/api/plans/${encodeURIComponent(id)}`)
+}
+
+export function adjustPlanBudget(id: string, budgetCents: number, evaluationDate: string) {
+  return request<Plan>(`/api/plans/${encodeURIComponent(id)}/budget`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ budget_cents: budgetCents, evaluation_date: evaluationDate }),
+  })
+}
+
+export function approvePlan(id: string) {
+  return request<{ order_id: string; approval_url: string }>(`/api/plans/${encodeURIComponent(id)}/approve`, {
+    method: 'POST',
+  })
 }

@@ -42,7 +42,7 @@ dist/
 Thumbs.db
 
 /AGENTS.md
-/docs/
+/docs/*
 /day1/
 /dividend.egg-info/
 /paypal-plan.md

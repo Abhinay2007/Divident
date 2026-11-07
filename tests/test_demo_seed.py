@@ -6,7 +6,8 @@ from sqlalchemy import func, select
 from dividend.db import create_database_engine, create_session_factory, initialize_database
 from dividend.demo import seed_demo_if_empty
 from dividend.models import (
-    LedgerEvent, Maintainer, Plan, PlanLine, Session, SourceResolution, UpstreamProject,
+    LedgerEvent, Maintainer, PayoutBatch, PayoutItem, Plan, PlanLine, Session,
+    SourceResolution, UpstreamProject,
 )
 from dividend.services.plan_service import PlanService
 
@@ -43,6 +44,14 @@ def test_demo_seed_is_idempotent_and_logically_deterministic(factory, tmp_path):
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(Session)) == 1
         assert db.scalar(select(func.count()).select_from(LedgerEvent)) == 2
+        maintainers = db.scalars(select(Maintainer)).all()
+        assert any(row.opted_in for row in maintainers)
+        assert any(not row.opted_in for row in maintainers)
+        assert all(row.display_name.startswith("Synthetic demo maintainer") for row in maintainers)
+        assert all(row.email.endswith("@example.invalid") for row in maintainers)
+        assert db.scalar(select(func.count()).select_from(Plan)) == 0
+        assert db.scalar(select(func.count()).select_from(PayoutBatch)) == 0
+        assert db.scalar(select(func.count()).select_from(PayoutItem)) == 0
 
     other_engine = create_database_engine(f"sqlite:///{tmp_path / 'second.db'}")
     initialize_database(other_engine)
@@ -94,3 +103,6 @@ def test_demo_relationships_eligibility_and_plan_creation(factory):
         assert plan.charge_cents is None
         assert plan.est_payout_fees_cents is None
         assert plan.state == "draft"
+        assert plan.order_id is None
+        assert db.scalar(select(func.count()).select_from(PayoutBatch)) == 0
+        assert db.scalar(select(func.count()).select_from(PayoutItem)) == 0

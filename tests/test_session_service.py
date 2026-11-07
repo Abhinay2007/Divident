@@ -153,6 +153,7 @@ def test_get_projects_uses_maintainer_opt_in_and_does_not_guess_no_upstream(db_f
         result = SessionService.get_projects(db, session_id)
         assert [item.upstream_key for item in result.projects] == ["owner/repo"]
         assert result.projects[0].payability == "payable"
+        assert result.projects[0].maintainer_name == "Maintainer"
         assert result.unmapped == [resolutions[1].source_name]
         assert result.no_upstream == []
         details = {item.source_name: item for item in result.sources}

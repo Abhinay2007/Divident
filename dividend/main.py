@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from . import models  # noqa: F401 - register all ORM metadata before startup
+from .allocation.engine import AllocationError
 from .config import Settings, get_settings
 from .db import create_database_engine, create_session_factory, initialize_database
 from .errors import (
@@ -120,6 +121,13 @@ def create_app(
         return JSONResponse(status_code=422, content={
             "error": "validation_error", "code": exc.code,
             "detail": exc.detail, "request_id": request_id(request),
+        })
+
+    @app.exception_handler(AllocationError)
+    async def handle_allocation_error(request: Request, exc: AllocationError):
+        return JSONResponse(status_code=422, content={
+            "error": "allocation_error", "code": "allocation_error",
+            "detail": str(exc), "request_id": request_id(request),
         })
 
     @app.exception_handler(RequestValidationError)

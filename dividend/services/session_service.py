@@ -257,11 +257,11 @@ class SessionService:
             .order_by(UpstreamProject.upstream_key)
         ))
         maintainer_rows = db.execute(
-            select(Maintainer.upstream_key, Maintainer.opted_in).where(
+            select(Maintainer.upstream_key, Maintainer.display_name, Maintainer.opted_in).where(
                 Maintainer.upstream_key.in_([project.upstream_key for project in projects])
             )
         ).all() if projects else []
-        opted_in = {key: value for key, value in maintainer_rows}
+        maintainers = {key: (name, opted_in) for key, name, opted_in in maintainer_rows}
         resolutions = list(db.scalars(
             select(SourceResolution)
             .where(SourceResolution.session_id == session_id)
@@ -297,7 +297,8 @@ class SessionService:
         ]
         responses = []
         for project in projects:
-            is_payable = opted_in.get(project.upstream_key) is True
+            maintainer = maintainers.get(project.upstream_key)
+            is_payable = maintainer is not None and maintainer[1] is True
             responses.append(ProjectResponse(
                 upstream_key=project.upstream_key,
                 display_name=project.display_name,
@@ -311,6 +312,7 @@ class SessionService:
                     if is_payable
                     else "No opted-in maintainer is available"
                 ),
+                maintainer_name=maintainer[0] if maintainer else None,
             ))
         return ProjectsResponse(projects=responses, unmapped=unmapped, no_upstream=no_upstream, sources=sources)
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import Discovery, { AllocationHandoff } from './Discovery'
+import Discovery from './Discovery'
+import AllocationReview from './AllocationReview'
 
 const navItems = [
   { label: 'Overview', icon: 'grid', href: '/' },
@@ -63,7 +64,7 @@ export default function App() {
           <div className="topbar-right"><span className="sandbox-pill"><span/>Sandbox environment</span><button className="help-button" type="button" aria-label="About the sandbox">?</button></div>
         </header>
         <main id="main" className={`main-content${isDiscovery ? ' main-content-discovery' : ''}`}>
-          {isDiscovery ? <Discovery sessionId={sessionId}/> : allocationId ? <AllocationHandoff planId={allocationId}/> : <>
+          {isDiscovery ? <Discovery sessionId={sessionId}/> : allocationId ? <AllocationReview planId={allocationId}/> : <>
           <div className="page-heading">
             <div><div className="eyebrow">OPEN-SOURCE FUNDING</div><h1>Good software deserves<br className="desktop-break"/> a sustainable future.</h1><p className="intro">See what your system depends on. Decide what to fund. Keep every dollar explainable.</p></div>
             <span className="date-stamp">DEBIAN · UBUNTU</span>

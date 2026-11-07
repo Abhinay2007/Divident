@@ -78,6 +78,7 @@ class ProjectResponse(Contract):
     need_signals: dict[str, Any]
     payability: str
     reason_summary: str
+    maintainer_name: str | None = None
 
 
 class SourceDetailResponse(Contract):
