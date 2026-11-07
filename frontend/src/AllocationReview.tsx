@@ -74,6 +74,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
   const record = plan.data
   const projectByKey = new Map((projects.data?.projects ?? []).map((project) => [project.upstream_key, project]))
   const isDraft = record.state === 'draft'
+  const approvalUnavailable = record.charge_cents === null || record.est_payout_fees_cents === null
   const approvalResult = approve.data
   const currentBudget = budgetDraft ?? (record.budget_cents / 100).toFixed(2)
 
@@ -142,10 +143,11 @@ export default function AllocationReview({ planId }: { planId: string }) {
         <p>{isDraft ? 'This request creates a PayPal order only when the required fee inputs are available. It does not capture funds or start maintainer payouts.' : 'A funding order is not the same as captured funds. Capture and payouts are handled in later steps.'}</p>
       </div>
       <div className="approval-actions">
-        {isDraft && <button className="button button-primary" type="button" disabled={approve.isPending || adjust.isPending} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking approval…' : adjust.isPending ? 'Updating plan…' : 'Request PayPal approval'}<span aria-hidden="true">→</span></button>}
+        {isDraft && <button className="button button-primary" type="button" disabled={approve.isPending || adjust.isPending || approvalUnavailable} title={approvalUnavailable ? 'Approval requires measured payment fee inputs.' : undefined} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking approval…' : adjust.isPending ? 'Updating plan…' : approvalUnavailable ? 'Approval unavailable · fees unmeasured' : 'Request PayPal approval'}{!approvalUnavailable && <span aria-hidden="true">→</span>}</button>}
         {approvalResult && <a className="button button-secondary" href={approvalResult.approval_url} target="_blank" rel="noreferrer">Open PayPal approval<span aria-hidden="true">↗</span></a>}
-        {approve.isError && <ErrorMessage error={approve.error} retry={() => approve.mutate()}/>}
+        {approve.isError && <ErrorMessage error={approve.error} retry={approve.error instanceof ApiError && !['order_outcome_unknown', 'charge_unavailable'].includes(approve.error.code ?? '') ? () => approve.mutate() : undefined}/>}
         {approve.isSuccess && <p className="form-success" role="status">PayPal order {approve.data.order_id} is ready for buyer authorization. No funds have been captured.</p>}
+        <a className="text-link" href={`/fund/${record.id}`}>View funding status <span aria-hidden="true">→</span></a>
         {!isDraft && <span className="status-pill"><span/>{stateLabel(record.state)}</span>}
       </div>
     </section>

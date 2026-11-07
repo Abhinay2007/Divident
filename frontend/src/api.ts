@@ -52,6 +52,12 @@ export type Plan = {
   est_payout_fees_cents: number | null
   charge_cents: number | null
   order_id: string | null
+  order_attempt: number
+  capture_attempt: number
+  capture_gross_cents: number | null
+  capture_fee_cents: number | null
+  capture_net_cents: number | null
+  failure_reason: string | null
   frozen_at: string | null
   money_summary: { charged_now_cents: number | null; pledged_cents: number; fee_estimate_cents: number | null }
   lines: {
@@ -90,7 +96,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       ? 'The allocation rules could not fit this budget. Choose another amount and try again.'
       : code === 'charge_unavailable'
         ? 'Approval is unavailable because the required payment fee inputs are not measured. No order was created.'
-        : undefined
+        : code === 'order_outcome_unknown'
+          ? 'The order result is uncertain. Check the plan status before taking another payment action.'
+          : undefined
     throw new ApiError(
       knownMessage || (typeof detail === 'string' ? detail : `Request failed (${response.status}). Try again.`),
       typeof body.request_id === 'string' ? body.request_id : undefined,
@@ -141,4 +149,13 @@ export function approvePlan(id: string) {
   return request<{ order_id: string; approval_url: string }>(`/api/plans/${encodeURIComponent(id)}/approve`, {
     method: 'POST',
   })
+}
+
+export type Capture = {
+  capture: { capture_id: string; gross_cents: number; fee_cents: number | null; net_cents: number; currency: string; status: string }
+  state: string
+}
+
+export function capturePlan(id: string) {
+  return request<Capture>(`/api/plans/${encodeURIComponent(id)}/capture`, { method: 'POST' })
 }
