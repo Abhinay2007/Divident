@@ -50,6 +50,10 @@ class LLMSchemaViolation(DividendError):
     pass
 
 
+class LLMProviderError(DividendError):
+    pass
+
+
 class EnrichmentError(DividendError):
     pass
 

@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 import re
+import logging
 from datetime import date
 from time import perf_counter
 
@@ -11,19 +12,21 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session as DbSession
 
 from ..errors import NotFoundError, StateError, ValidationError
+from ..llm.limits import LiveResolutionLimits, SessionLimitedProvider
 from ..ledger import append as append_ledger_event
-from ..models import Maintainer, Session, SourceResolution, UpstreamProject
+from ..models import LLMCache, Maintainer, Session, SourceResolution, UpstreamProject
 from ..allocation.snapshot import source_facts_payload
 from ..enrichment.base import Enricher, FactSet, GitHubFacts
 from ..upstream.mapper import map_source
 from ..upstream.overrides import OverrideConfig
-from ..upstream.resolver import LLMProvider, resolve
+from ..upstream.resolver import LLMProvider, cache_key, resolve
 from ..scan import group_by_source, parse_rows
 from ..schemas import ProjectsResponse, ProjectResponse, SessionCreateRequest, SourceDetailResponse
 
 
 _PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.\-]*$")
 _DEMO_FIXTURE = Path(__file__).resolve().parents[1] / "data" / "demo_dpkg.tsv"
+_logger = logging.getLogger(__name__)
 
 
 def _begin_sqlite_transaction(db: DbSession) -> None:
@@ -318,7 +321,9 @@ class SessionService:
 
     @staticmethod
     def resolve_sources(db: DbSession, session_id: str, enricher: Enricher,
-                        overrides: OverrideConfig, llm: LLMProvider | None = None) -> Session:
+                        overrides: OverrideConfig, llm: LLMProvider | None = None,
+                        llm_model: str = "unknown",
+                        llm_limits: LiveResolutionLimits | None = None) -> Session:
         """Resolve sources safely and upsert projects without duplicate identities."""
         started = perf_counter()
         session = SessionService.get(db, session_id)
@@ -363,7 +368,29 @@ class SessionService:
                 fact_by_name[name] = FactSet(name, partial=True)
         mappings = {name: map_source(name, fact_by_name[name], overrides) for name in names}
         pending = [fact_by_name[name] for name in names if mappings[name].outcome == "unmapped"]
-        proposals = resolve(pending, llm, set(overrides.family_patterns or {})) if llm is not None and pending else []
+        resolution_stats = {}
+        proposals = []
+        if pending and llm is not None:
+            provider = llm
+            if llm_limits is not None:
+                selected = llm_limits.select_sources(session_id, pending)
+                if len(selected) < len(pending):
+                    _logger.info("Live AI source limit reached; remaining candidates stay unmapped")
+                pending = selected
+                provider = SessionLimitedProvider(llm, llm_limits, session_id)
+            def get_cached(fact, model):
+                cached = db.get(LLMCache, cache_key(fact, model))
+                return cached.response if cached else None
+
+            def save_cached(fact, model, response):
+                db.merge(LLMCache(key=cache_key(fact, model), response=response))
+
+            proposals = resolve(pending, provider, set(overrides.family_patterns or {}),
+                                model=llm_model, cache_get=get_cached,
+                                cache_set=save_cached, cache_stats=resolution_stats)
+        elif pending:
+            _logger.info("AI resolution disabled; %d candidates remain unmapped", len(pending))
+        cached_sources = set(resolution_stats.get("cached_sources", []))
         for proposal in proposals:
             old = mappings[proposal.source_name]
             mappings[proposal.source_name] = type(old)(proposal.source_name, proposal.upstream_key, "llm",
@@ -379,7 +406,7 @@ class SessionService:
             row.upstream_key, row.method, row.outcome = mapping.upstream_key, mapping.method, mapping.outcome
             row.evidence = mapping.evidence or None
             row.validated = mapping.method == "llm"
-            row.cached = False
+            row.cached = name in cached_sources
 
         by_key: dict[str, list[str]] = {}
         for name, mapping in mappings.items():

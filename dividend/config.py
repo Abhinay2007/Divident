@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "openai/gpt-oss-20b"
     LLM_LIVE_ENABLED: bool = True
     LLM_KILL_SWITCH: bool = False
+    LLM_MAX_SOURCES_PER_SESSION: int = Field(default=5, ge=1)
+    LLM_MAX_CALLS_PER_HOUR: int = Field(default=100, ge=1)
 
     ENRICH_MODE: Literal["fixtures", "live"] = "fixtures"
     GITHUB_TOKEN: str | None = Field(default=None, repr=False)
@@ -77,7 +79,7 @@ class Settings(BaseSettings):
             if not isinstance(policy, dict) or policy.get("measured") is not True:
                 raise ValueError("PayPal mode requires a measured allocation policy")
 
-        if self.LLM_LIVE_ENABLED and not self.GROQ_API_KEY:
+        if self.LLM_LIVE_ENABLED and not self.LLM_KILL_SWITCH and not self.GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY is required when LLM_LIVE_ENABLED is true")
         if self.ENRICH_MODE == "live":
             missing = [name for name, value in (

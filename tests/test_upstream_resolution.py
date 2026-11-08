@@ -1,15 +1,15 @@
 import json
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from dividend.db import create_database_engine, create_session_factory, initialize_database
 from dividend.enrichment.base import FactSet
-from dividend.models import Session, SourceResolution, UpstreamProject
+from dividend.models import LLMCache, Maintainer, PayoutBatch, Session, SourceResolution, UpstreamProject
 from dividend.services import PlanService, SessionService
 from dividend.upstream.mapper import map_source
 from dividend.upstream.normalizer import normalize
 from dividend.upstream.overrides import OverrideConfig
-from dividend.upstream.resolver import resolve
+from dividend.upstream.resolver import cache_key, resolve
 from dividend.upstream.validator import Proposal, validate
 
 
@@ -59,6 +59,114 @@ def test_llm_batches_and_retries_only_rejected_subset_with_limit():
     assert provider.calls == [[f.source_name for f in facts[:10]], ["pkg-0"], ["pkg-0"],
                               [f.source_name for f in facts[10:20]], [f.source_name for f in facts[20:]]]
     assert sum(call.count("pkg-0") for call in provider.calls) == 3
+
+
+def test_validated_resolution_cache_hits_and_model_invalidates(tmp_path):
+    from dividend.db import create_session_factory, initialize_database
+
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'llm-cache.db'}")
+    initialize_database(engine)
+    factory = create_session_factory(engine)
+    fact = FactSet("pkg", homepage="https://example.org/project")
+
+    class Fake:
+        def __init__(self): self.calls = 0
+        def structured_call(self, prompt, schema, timeout=30):
+            self.calls += 1
+            return {"proposals": [{"source_name": "pkg", "upstream_key": "example.org/project",
+                "display_name": "project", "evidence": [{"field": "udd.homepage", "value": fact.homepage}]}]}
+
+    try:
+        with factory() as db:
+            first = Fake()
+            stats = {}
+            get_cache = lambda item, model: (cached.response if (cached := db.get(LLMCache, cache_key(item, model))) else None)
+            set_cache = lambda item, model, response: db.merge(LLMCache(key=cache_key(item, model), response=response))
+            assert len(resolve([fact], first, model="model-a", cache_stats=stats,
+                               cache_get=get_cache, cache_set=set_cache)) == 1
+            assert stats["cache_hits"] == 0 and first.calls == 1
+            db.commit()
+        with factory() as db:
+            unused = Fake()
+            stats = {}
+            get_cache = lambda item, model: (cached.response if (cached := db.get(LLMCache, cache_key(item, model))) else None)
+            set_cache = lambda item, model, response: db.merge(LLMCache(key=cache_key(item, model), response=response))
+            assert len(resolve([fact], unused, model="model-a", cache_stats=stats,
+                               cache_get=get_cache, cache_set=set_cache)) == 1
+            assert stats["cache_hits"] == 1 and unused.calls == 0
+        with factory() as db:
+            changed_model = Fake()
+            assert len(resolve([fact], changed_model, model="model-b", cache_get=get_cache,
+                               cache_set=set_cache)) == 1
+            assert changed_model.calls == 1
+    finally:
+        engine.dispose()
+
+
+def test_invalid_proposal_is_never_cached(tmp_path):
+    from dividend.db import create_session_factory, initialize_database
+
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'invalid-cache.db'}")
+    initialize_database(engine)
+    factory = create_session_factory(engine)
+    fact = FactSet("pkg")
+
+    class Invalid:
+        def structured_call(self, prompt, schema, timeout=30):
+            return {"proposals": [{"source_name": "pkg", "upstream_key": "fake.invalid/pkg",
+                "display_name": "pkg", "evidence": [{"field": "udd.homepage", "value": "https://fake.invalid/pkg"}]}]}
+
+    try:
+        with factory() as db:
+            get_cache = lambda item, model: (cached.response if (cached := db.get(LLMCache, cache_key(item, model))) else None)
+            set_cache = lambda item, model, response: db.merge(LLMCache(key=cache_key(item, model), response=response))
+            assert resolve([fact], Invalid(), model="model", cache_get=get_cache,
+                           cache_set=set_cache) == []
+            assert db.scalar(select(LLMCache)) is None
+    finally:
+        engine.dispose()
+
+
+def test_invalid_ai_mapping_stays_unmapped_and_cannot_touch_payee_or_payout_data(tmp_path):
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'llm-isolation.db'}")
+    initialize_database(engine)
+    factory = create_session_factory(engine)
+
+    class InvalidProvider:
+        prompt = ""
+        def structured_call(self, prompt, schema, timeout=30):
+            self.prompt = prompt
+            return {"proposals": [{"source_name": "candidate", "upstream_key": "fake.invalid/project",
+                "display_name": "project", "evidence": [{"field": "udd.homepage",
+                "value": "https://fake.invalid/project"}]}]}
+
+    provider = InvalidProvider()
+    try:
+        with factory() as db:
+            session = SessionService.create(db, "paste", "candidate")
+            session_id = session.id
+            db.add(Maintainer(upstream_key="example.org/project", display_name="Maintainer",
+                              email="private@example.org", opted_in=False))
+            db.commit()
+
+        class Enricher:
+            def fetch(self, names):
+                return [FactSet("candidate", homepage="https://example.org/project")]
+
+        with factory() as db:
+            SessionService.resolve_sources(db, session_id, Enricher(), OverrideConfig(), provider)
+            db.commit()
+        with factory() as db:
+            resolution = db.scalar(select(SourceResolution).where(
+                SourceResolution.session_id == session_id, SourceResolution.source_name == "candidate"))
+            maintainer = db.scalar(select(Maintainer).where(Maintainer.upstream_key == "example.org/project"))
+            assert resolution.outcome == "unmapped" and resolution.upstream_key is None
+            assert maintainer.email == "private@example.org" and maintainer.opted_in is False
+            assert db.scalar(select(func.count()).select_from(PayoutBatch)) == 0
+            assert "private@example.org" not in provider.prompt
+            assert "payment" not in provider.prompt.lower()
+    finally:
+        engine.dispose()
 
 
 def test_eval_fixture_has_at_least_30_contract_cases_and_validator_rejections():

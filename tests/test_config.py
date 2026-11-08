@@ -76,6 +76,7 @@ def test_groq_only_and_live_key_requirement(tmp_path):
         Settings(**base(tmp_path, LLM_PROVIDER="other"))
     with pytest.raises(ValidationError, match="GROQ_API_KEY"):
         Settings(**base(tmp_path, LLM_LIVE_ENABLED=True))
+    assert Settings(**base(tmp_path, LLM_LIVE_ENABLED=True, LLM_KILL_SWITCH=True)).LLM_KILL_SWITCH
 
 
 def test_fixture_enrichment_needs_no_live_credentials(tmp_path):

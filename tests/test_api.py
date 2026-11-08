@@ -87,6 +87,22 @@ def test_api_session_validation_request_id_and_health_startup(tmp_path):
     engine.dispose()
 
 
+def test_llm_kill_switch_overrides_injected_provider(tmp_path):
+    from dividend.llm.groq_provider import GroqProvider
+
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'kill-switch.db'}")
+    factory = create_session_factory(engine)
+    configured = Settings(
+        ADMIN_TOKEN="test-token", PUBLIC_BASE_URL="https://example.test",
+        PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=True, LLM_KILL_SWITCH=True,
+        allocation_policy_path=tmp_path / "allocation_policy.yaml",
+    )
+    app = create_app(configured, engine=engine, session_factory=factory,
+                     llm_provider=GroqProvider("unused", "test", client=object()))
+    assert app.state.llm is None
+    engine.dispose()
+
+
 def test_api_approval_returns_charge_error_without_hanging(tmp_path):
     engine = create_database_engine(f"sqlite:///{tmp_path / 'approval.db'}")
     factory = create_session_factory(engine)

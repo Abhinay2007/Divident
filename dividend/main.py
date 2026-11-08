@@ -29,6 +29,8 @@ from .upstream.overrides import load_overrides
 from .services import SessionService
 from .payments.fake import FakeProvider
 from .payments.paypal import PayPalProvider
+from .llm.groq_provider import GroqProvider
+from .llm.limits import LiveResolutionLimits
 from .services.payment_service import PaymentService
 from .demo import seed_demo_if_empty
 
@@ -40,6 +42,7 @@ def create_app(
     session_factory=None,
     resolution_runner=None,
     payment_provider=None,
+    llm_provider=None,
 ) -> FastAPI:
     """Build an application with injectable persistence and T4 resolution seam."""
     configured = settings or get_settings()
@@ -53,6 +56,13 @@ def create_app(
     elif provider is None and configured.PAYMENTS_MODE == "paypal":
         provider = PayPalProvider(configured.PAYPAL_CLIENT_ID or "",
                                   configured.PAYPAL_CLIENT_SECRET or "")
+    llm_enabled = configured.LLM_LIVE_ENABLED and not configured.LLM_KILL_SWITCH
+    owns_llm = llm_provider is None and llm_enabled
+    resolver_provider = llm_provider if llm_enabled else None
+    llm_limits = LiveResolutionLimits(configured.LLM_MAX_SOURCES_PER_SESSION,
+                                      configured.LLM_MAX_CALLS_PER_HOUR) if llm_enabled else None
+    if resolver_provider is None and llm_enabled:
+        resolver_provider = GroqProvider(configured.GROQ_API_KEY or "", configured.LLM_MODEL)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -64,6 +74,8 @@ def create_app(
         finally:
             if owns_provider:
                 provider.close()
+            if owns_llm:
+                resolver_provider.close()
             if owns_engine:
                 app_engine.dispose()
 
@@ -72,6 +84,8 @@ def create_app(
     app.state.engine = app_engine
     app.state.session_factory = factory
     app.state.provider = provider
+    app.state.llm = resolver_provider
+    app.state.llm_limits = llm_limits
     app.state.payment_service = (
         PaymentService(provider, str(configured.PUBLIC_BASE_URL),
                        configured.allocation_policy_path
@@ -86,6 +100,7 @@ def create_app(
                         db, session_id,
                         FixtureEnricher(Path(__file__).parent / "data" / "demo_enrichment.json"),
                         load_overrides(),
+                        resolver_provider, configured.LLM_MODEL, llm_limits,
                     )
                     db.commit()
                 except Exception as exc:
@@ -101,6 +116,7 @@ def create_app(
                         db, session_id,
                         LiveEnricher(UDDClient(configured.UDD_DSN), GitHubClient(configured.GITHUB_TOKEN)),
                         load_overrides(),
+                        resolver_provider, configured.LLM_MODEL, llm_limits,
                     )
                     db.commit()
                 except Exception as exc:
