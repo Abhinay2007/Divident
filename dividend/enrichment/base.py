@@ -24,6 +24,9 @@ class FactSet:
     contact: str | None = None
     github_owner_login: str | None = None
     github_parent_full_name: str | None = None
+    official_repository_url: str | None = None
+    official_project_source_url: str | None = None
+    official_provenance: str | None = None
 
 
 class Enricher(Protocol):

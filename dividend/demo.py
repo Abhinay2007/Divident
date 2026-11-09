@@ -16,22 +16,24 @@ _DATA = Path(__file__).resolve().parent.parent / "data"
 _EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
-def load_sandbox_recipients(path: Path | str | None) -> dict[str, str]:
+def load_sandbox_recipients(path: Path | str | None) -> dict[str, dict[str, str]]:
     """Load optional, user-supplied sandbox recipients separately from demo identities."""
     if path is None:
         return {}
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if (type(raw) is not dict or raw.get("schema") != 1
+    if (type(raw) is not dict or raw.get("schema") != 2
             or type(raw.get("recipients")) is not dict):
-        raise ValueError("sandbox recipient file must contain schema: 1 and a recipients mapping")
+        raise ValueError("sandbox recipient file must contain schema: 2 and a recipients mapping")
     recipients = raw["recipients"]
-    if any(type(key) is not str or type(email) is not str or not _EMAIL.fullmatch(email)
-           for key, email in recipients.items()):
-        raise ValueError("sandbox recipients must map upstream keys to valid email addresses")
+    if any(type(key) is not str or type(recipient) is not dict
+           or set(recipient) != {"email", "market_code"}
+           or type(recipient["email"]) is not str or not _EMAIL.fullmatch(recipient["email"])
+           or recipient["market_code"] != "US" for key, recipient in recipients.items()):
+        raise ValueError("Sandbox recipients require a valid email and explicit market_code: US")
     return recipients
 
 
-def seed_demo(db: DbSession, sandbox_recipients: dict[str, str] | None = None) -> Session:
+def seed_demo(db: DbSession, sandbox_recipients: dict[str, dict[str, str]] | None = None) -> Session:
     """Create one resolved demo session and its synthetic maintainer records."""
     fixture = yaml.safe_load((_DATA / "demo_maintainers.yaml").read_text(encoding="utf-8"))
     if (type(fixture) is not dict or fixture.get("schema") != 1
@@ -58,8 +60,9 @@ def seed_demo(db: DbSession, sandbox_recipients: dict[str, str] | None = None) -
         Maintainer(
             upstream_key=row["upstream_key"],
             display_name=row["display_name"],
-            email=sandbox_recipients.get(row["upstream_key"], row["email"]),
+            email=sandbox_recipients.get(row["upstream_key"], {}).get("email", row["email"]),
             opted_in=row["opted_in"],
+            market_code=sandbox_recipients.get(row["upstream_key"], {}).get("market_code"),
         )
         for row in maintainers
     ])

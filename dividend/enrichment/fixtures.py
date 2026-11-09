@@ -25,5 +25,8 @@ class FixtureEnricher:
             result.append(FactSet(source_name=name, repository_url=entry.get("repository_url", entry.get("Repository")),
                                   homepage=entry.get("homepage", entry.get("Homepage")), donation=entry.get("donation"),
                                   github=github, partial=entry.get("partial", True), contact=entry.get("contact", entry.get("Contact")),
-                                  github_owner_login=entry.get("owner_login"), github_parent_full_name=entry.get("parent_full_name")))
+                                  github_owner_login=entry.get("owner_login"), github_parent_full_name=entry.get("parent_full_name"),
+                                  official_repository_url=entry.get("official_repository_url"),
+                                  official_project_source_url=entry.get("official_project_source_url"),
+                                  official_provenance=entry.get("official_provenance")))
         return result

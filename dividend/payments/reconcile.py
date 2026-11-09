@@ -11,6 +11,6 @@ def map_item_status(raw_status: str) -> str:
 
 
 def map_batch_status(raw_status: str) -> str:
-    return {"PENDING": "pending", "ONHOLD": "pending", "SUCCESS": "success",
-            "FAILED": "failed", "DENIED": "failed"}.get(
+    return {"PENDING": "pending", "PROCESSING": "pending", "ONHOLD": "pending", "SUCCESS": "success",
+            "FAILED": "failed", "DENIED": "failed", "CANCELED": "failed"}.get(
                 raw_status.upper() if type(raw_status) is str else "", "needs_attention")

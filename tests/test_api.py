@@ -5,7 +5,10 @@ from sqlalchemy import select
 from dividend.config import Settings
 from dividend.db import create_database_engine, create_session_factory, initialize_database
 from dividend.main import create_app
-from dividend.models import Plan, Session as SessionRecord, SourceResolution, UpstreamProject
+from dividend.models import Maintainer, Plan, PayoutBatch, PayoutItem, Session as SessionRecord, SourceResolution, UpstreamProject
+from dividend.api.deps import plan_access_token
+from dividend.api.deps import admin_auth
+from fastapi import HTTPException
 
 
 def settings(tmp_path):
@@ -42,6 +45,10 @@ def test_api_session_validation_request_id_and_health_startup(tmp_path):
         assert health.status_code == 200
         assert health.json() == {"db": "ok", "provider_mode": "fake", "fixtures_loaded": True}
         assert health.headers.get("x-request-id")
+        config = await client.get("/config")
+        assert config.status_code == 200
+        assert config.json()["payments_mode"] == "fake"
+        assert config.json()["fee_params"]["order_fee_pct"] == 3.49
 
         response = await client.post(
             "/api/sessions",
@@ -62,8 +69,8 @@ def test_api_session_validation_request_id_and_health_startup(tmp_path):
         assert projects.json() == {
             "projects": [], "unmapped": ["src-0", "src-1"], "no_upstream": [],
             "sources": [
-                {"source_name": "src-0", "binary_names": ["bin-0"], "upstream_key": None, "method": "none", "outcome": "unmapped"},
-                {"source_name": "src-1", "binary_names": ["bin-1"], "upstream_key": None, "method": "none", "outcome": "unmapped"},
+                {"source_name": "src-0", "binary_names": ["bin-0"], "upstream_key": None, "method": "none", "outcome": "unmapped", "validated": False, "evidence": None, "repository_url": None},
+                {"source_name": "src-1", "binary_names": ["bin-1"], "upstream_key": None, "method": "none", "outcome": "unmapped", "validated": False, "evidence": None, "repository_url": None},
             ],
         }
 
@@ -84,6 +91,76 @@ def test_api_session_validation_request_id_and_health_startup(tmp_path):
         assert too_large.status_code == 413
         assert too_large.json()["code"] == "request_too_large"
     asyncio.run(exercise())
+    engine.dispose()
+
+
+def test_admin_auth_dependency_uses_constant_time_token_check(tmp_path):
+    from types import SimpleNamespace
+    import pytest
+
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings(tmp_path))))
+    asyncio.run(admin_auth(request, "test-token"))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(admin_auth(request, "wrong"))
+    assert error.value.status_code == 401
+
+
+def test_plan_routes_require_capability_and_rejected_calls_have_no_payment_side_effects(tmp_path):
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'auth.db'}")
+    factory = create_session_factory(engine)
+    app = create_app(settings(tmp_path), engine=engine, session_factory=factory)
+    initialize_database(engine)
+    with factory.begin() as db:
+        session = SessionRecord(mode="upload", status="ready", source_names=[], source_count=0)
+        db.add(session)
+        db.flush()
+        plan = Plan(session_id=session.id, state="settled", budget_cents=1000,
+                    payable_total_cents=1000, reserved_total_cents=0, charge_cents=None,
+                    payout_attempt=1)
+        db.add(plan)
+        db.flush()
+        plan_id = plan.id
+        batch = PayoutBatch(plan_id=plan_id, attempt=1, sender_batch_id="sender-test",
+                            external_id="provider-test-batch", status="success")
+        db.add(batch)
+        db.flush()
+        db.add(PayoutItem(batch_id=batch.id, plan_id=plan_id, upstream_key="owner/repo",
+                          sender_item_id="item-test", recipient_email="private@example.test",
+                          amount_cents=100, status="success"))
+        db.add(Maintainer(upstream_key="owner/repo", display_name="Public Maintainer",
+                          email="private@example.test", opted_in=True))
+
+    async def exercise():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                paths = [
+                    ("get", f"/api/plans/{plan_id}"),
+                    ("patch", f"/api/plans/{plan_id}/budget"),
+                    ("post", f"/api/plans/{plan_id}/approve"),
+                    ("post", f"/api/plans/{plan_id}/capture"),
+                    ("post", f"/api/plans/{plan_id}/payout"),
+                    ("post", f"/api/plans/{plan_id}/payout/retry"),
+                    ("post", f"/api/plans/{plan_id}/reconcile"),
+                    ("get", f"/api/plans/{plan_id}/payouts"),
+                    ("post", f"/api/plans/{plan_id}/cancel"),
+                ]
+                for method, path in paths:
+                    response = await getattr(client, method)(path)
+                    assert response.status_code == 401, (path, response.text)
+                    assert response.json()["request_id"]
+                visible = await client.get(f"/api/plans/{plan_id}/payouts", headers={
+                    "X-Plan-Token": plan_access_token("test-token", plan_id),
+                })
+                assert visible.status_code == 200
+                assert "private@example.test" not in visible.text
+                assert "recipient_email" not in visible.text
+                assert visible.json()["batches"][0]["items"][0]["recipient_display"] == "Public Maintainer"
+                assert not app.state.provider.orders
+                assert not app.state.provider.batches
+
+    asyncio.run(exercise())
+    with factory() as db:
+        assert db.get(Plan, plan_id).state == "settled"
     engine.dispose()
 
 
@@ -130,7 +207,7 @@ def test_api_approval_returns_charge_error_without_hanging(tmp_path):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:
-                response = await client.post(f"/api/plans/{plan_id}/approve")
+                response = await client.post(f"/api/plans/{plan_id}/approve", headers={"X-Plan-Token": plan_access_token("test-token", plan_id)})
                 assert response.status_code == 422
                 assert response.json()["code"] == "charge_unavailable"
 
@@ -173,6 +250,7 @@ def test_end_to_end_api_intake_to_plan_budget_adjustment_and_approval(tmp_path):
                 key = f"fixture/project-{index}"
                 resolution.method = "override"
                 resolution.upstream_key = key
+                resolution.validated = True
                 db.add(UpstreamProject(
                     session_id=session_id,
                     upstream_key=key,
@@ -201,14 +279,22 @@ def test_end_to_end_api_intake_to_plan_budget_adjustment_and_approval(tmp_path):
         )
         assert plan_response.status_code == 201, plan_response.text
         plan = plan_response.json()
+        headers = {"X-Plan-Token": plan["action_token"]}
         assert plan["budget_cents"] == 1000
         assert sum(line["amount_cents"] for line in plan["lines"]) == 1000
         assert plan["charge_cents"] is None
-        assert plan["est_payout_fees_cents"] is None
+        assert plan["est_payout_fees_cents"] == 0
+        explanations = await client.get(f"/api/plans/{plan['id']}/explanations", headers=headers)
+        assert explanations.status_code == 200, explanations.text
+        assert len(explanations.json()["explanations"]) == len(plan["lines"])
+        assert all(item["status"] == "disabled" for item in explanations.json()["explanations"])
+        assert all(claim["evidence_ids"] for item in explanations.json()["explanations"]
+                   for claim in item["claims"])
 
         adjusted = await client.patch(
             f"/api/plans/{plan['id']}/budget",
             json={"budget_cents": 1100, "evaluation_date": "2026-11-06"},
+            headers=headers,
         )
         assert adjusted.status_code == 200, adjusted.text
         assert adjusted.json()["budget_cents"] == 1100
@@ -217,20 +303,22 @@ def test_end_to_end_api_intake_to_plan_budget_adjustment_and_approval(tmp_path):
         infeasible = await client.patch(
             f"/api/plans/{plan['id']}/budget",
             json={"budget_cents": 100, "evaluation_date": "2026-11-06"},
+            headers=headers,
         )
         assert infeasible.status_code == 422
         assert infeasible.json()["code"] == "allocation_error"
         assert infeasible.json()["request_id"]
-        assert (await client.get(f"/api/plans/{plan['id']}")).json()["budget_cents"] == 1100
+        assert (await client.get(f"/api/plans/{plan['id']}", headers=headers)).json()["budget_cents"] == 1100
 
-        approved = await client.post(f"/api/plans/{plan['id']}/approve")
+        approved = await client.post(f"/api/plans/{plan['id']}/approve", headers=headers)
         assert approved.status_code == 422, approved.text
         assert approved.json()["code"] == "charge_unavailable"
-        assert (await client.get(f"/api/plans/{plan['id']}")).json()["state"] == "draft"
+        assert (await client.get(f"/api/plans/{plan['id']}", headers=headers)).json()["state"] == "draft"
 
         still_editable = await client.patch(
             f"/api/plans/{plan['id']}/budget",
             json={"budget_cents": 1000, "evaluation_date": "2026-11-06"},
+            headers=headers,
         )
         assert still_editable.status_code == 200
     asyncio.run(exercise())

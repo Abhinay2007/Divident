@@ -13,7 +13,8 @@ from dividend.db import Base, create_database_engine, create_session_factory, in
 
 EXPECTED_TABLES = {
     "sessions", "source_resolutions", "upstream_projects", "maintainers", "plans",
-    "plan_lines", "payout_batches", "payout_items", "ledger_events", "llm_cache",
+    "plan_lines", "payout_batches", "payout_items", "payment_operations",
+    "ledger_events", "llm_cache",
 }
 
 
@@ -30,7 +31,7 @@ def _names(table):
     return set(table.columns.keys())
 
 
-def test_import_registers_exactly_ten_expected_tables():
+def test_import_registers_exactly_eleven_expected_tables():
     assert set(Base.metadata.tables) == EXPECTED_TABLES
     assert len(models.__dict__) >= 10
 
@@ -40,11 +41,12 @@ def test_columns_types_and_money_are_lld_defined():
         "sessions": {"id", "mode", "status", "source_names", "source_binaries", "binary_count", "source_count", "stage", "progress_done", "progress_total", "error_message", "created_at", "expires_at"},
         "source_resolutions": {"id", "session_id", "source_name", "upstream_key", "method", "outcome", "evidence", "validated", "cached", "created_at"},
         "upstream_projects": {"id", "session_id", "upstream_key", "display_name", "repository_url", "binary_count", "source_names", "source_facts", "need_signals", "created_at"},
-        "maintainers": {"id", "upstream_key", "display_name", "email", "opted_in", "created_at"},
-        "plans": {"id", "session_id", "state", "budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "charge_cents", "order_id", "approval_url", "order_attempt", "capture_attempt", "payout_attempt", "capture_gross_cents", "capture_fee_cents", "capture_net_cents", "failure_reason", "frozen_at", "created_at"},
+        "maintainers": {"id", "upstream_key", "display_name", "email", "opted_in", "market_code", "created_at"},
+        "plans": {"id", "session_id", "state", "budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "est_incoming_fee_cents", "charge_cents", "fee_policy_version", "fee_policy_snapshot", "order_id", "approval_url", "order_attempt", "capture_attempt", "payout_attempt", "capture_gross_cents", "capture_fee_cents", "capture_net_cents", "failure_reason", "frozen_at", "created_at"},
         "plan_lines": {"id", "plan_id", "upstream_key", "display_name", "weight", "amount_cents", "payable_cents", "reserved_cents", "reason", "facts_snapshot"},
-        "payout_batches": {"id", "plan_id", "attempt", "sender_batch_id", "external_id", "status", "fees_cents", "created_at"},
-        "payout_items": {"id", "batch_id", "plan_id", "upstream_key", "sender_item_id", "recipient_email", "amount_cents", "status", "external_id", "updated_at"},
+        "payout_batches": {"id", "plan_id", "attempt", "sender_batch_id", "external_id", "status", "fees_cents", "estimated_fees_cents", "created_at"},
+        "payout_items": {"id", "batch_id", "plan_id", "upstream_key", "sender_item_id", "recipient_email", "amount_cents", "status", "external_id", "failure_reason", "updated_at"},
+        "payment_operations": {"id", "plan_id", "kind", "attempt", "state", "request_id", "external_id", "payout_batch_id", "provider_result", "prior_plan_state", "error_code", "created_at", "updated_at", "resolved_at"},
         "ledger_events": {"id", "plan_id", "session_id", "type", "external_id", "payload", "created_at"},
         "llm_cache": {"key", "response", "created_at"},
     }
@@ -71,6 +73,7 @@ def test_primary_keys_foreign_keys_unique_constraints_and_indexes():
     assert {fk.target_fullname for fk in inspector_tables["plan_lines"].foreign_keys} == {"plans.id"}
     assert {fk.target_fullname for fk in inspector_tables["payout_batches"].foreign_keys} == {"plans.id"}
     assert {fk.target_fullname for fk in inspector_tables["payout_items"].foreign_keys} == {"payout_batches.id", "plans.id"}
+    assert {fk.target_fullname for fk in inspector_tables["payment_operations"].foreign_keys} == {"plans.id", "payout_batches.id"}
     assert {fk.target_fullname for fk in inspector_tables["ledger_events"].foreign_keys} == {"plans.id", "sessions.id"}
 
     expected_unique = {
@@ -78,6 +81,7 @@ def test_primary_keys_foreign_keys_unique_constraints_and_indexes():
         "upstream_projects": {("session_id", "upstream_key")},
         "payout_batches": {("plan_id", "attempt")},
         "payout_items": {("batch_id", "sender_item_id")},
+        "payment_operations": {("plan_id", "kind", "attempt"), ("request_id",), ("payout_batch_id",)},
     }
     for table_name, columns in expected_unique.items():
         actual = {tuple(constraint.columns.keys()) for constraint in inspector_tables[table_name].constraints if constraint.__class__.__name__ == "UniqueConstraint"}
@@ -88,6 +92,8 @@ def test_primary_keys_foreign_keys_unique_constraints_and_indexes():
     assert {"plan_id", "status"} <= {column.name for index in inspector_tables["payout_items"].indexes for column in index.columns}
     assert any(tuple(index.columns.keys()) == ("plan_id", "created_at") for index in inspector_tables["ledger_events"].indexes)
     assert any(tuple(index.columns.keys()) == ("session_id", "created_at") for index in inspector_tables["ledger_events"].indexes)
+    assert any(index.name == "uq_payment_operations_active_kind" and index.unique
+               for index in inspector_tables["payment_operations"].indexes)
 
 
 def test_partial_ledger_dedupe_index(database):
@@ -132,6 +138,26 @@ def test_uuid_utc_defaults_and_relationship_integrity(database):
         persisted = session.get(models.Session, record_id)
         assert persisted.created_at.tzinfo is not None
         assert persisted.created_at.utcoffset().total_seconds() == 0
+
+
+def test_reinitialization_preserves_existing_fee_policy_snapshot(database):
+    engine, factory = database
+    with factory.begin() as db:
+        session = models.Session(mode="upload", source_names=["pkg"], source_count=1)
+        db.add(session)
+        db.flush()
+        plan = models.Plan(session_id=session.id, budget_cents=100, payable_total_cents=100,
+                           reserved_total_cents=0, state="draft",
+                           fee_policy_version="historic-policy-v0",
+                           fee_policy_snapshot={"version": "historic-policy-v0", "supported": False})
+        db.add(plan)
+        db.flush()
+        plan_id = plan.id
+    initialize_database(engine)
+    with factory() as db:
+        plan = db.get(models.Plan, plan_id)
+        assert plan.fee_policy_version == "historic-policy-v0"
+        assert plan.fee_policy_snapshot == {"version": "historic-policy-v0", "supported": False}
     with pytest.raises(IntegrityError):
         with factory.begin() as session:
             session.add(models.SourceResolution(session_id="missing", source_name="x", method="none"))

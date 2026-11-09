@@ -73,6 +73,8 @@ class ProjectResponse(Contract):
     upstream_key: str
     display_name: str
     repository_url: str | None
+    validated: bool = False
+    evidence: list[dict[str, str]] = Field(default_factory=list)
     binary_count: int
     source_names: list[str]
     need_signals: dict[str, Any]
@@ -87,6 +89,9 @@ class SourceDetailResponse(Contract):
     upstream_key: str | None
     method: str
     outcome: str
+    validated: bool = False
+    evidence: list[dict[str, str]] | None = None
+    repository_url: str | None = None
 
 
 class ProjectsResponse(Contract):
@@ -131,6 +136,8 @@ class PlanResponse(Contract):
     payable_total_cents: int = Field(strict=True)
     reserved_total_cents: int = Field(strict=True)
     est_payout_fees_cents: int | None = Field(strict=True)
+    est_incoming_fee_cents: int | None = Field(default=None, strict=True)
+    fee_policy_version: str | None = None
     charge_cents: int | None = Field(strict=True)
     order_id: str | None
     order_attempt: int
@@ -143,6 +150,7 @@ class PlanResponse(Contract):
     frozen_at: datetime | None
     lines: list[PlanLineResponse]
     money_summary: MoneySummary
+    action_token: str | None = None
 
 
 class ApproveResponse(Contract):
@@ -173,9 +181,10 @@ class PayoutResponse(Contract):
 class ItemResponse(Contract):
     sender_item_id: str
     upstream_key: str
-    recipient_email: str
+    recipient_display: str = "Verified recipient"
     amount_cents: int = Field(strict=True)
     status: str
+    failure_reason: str | None = None
     updated_at: datetime
 
 
@@ -226,6 +235,7 @@ class ConfigResponse(Contract):
     fee_params: FeeParams
     paypal_env: str
     sandbox: bool
+    payments_mode: Literal["paypal", "fake"]
     llm_live_enabled: bool
     cold_start_seconds: int
 
@@ -245,3 +255,21 @@ class ResolveLiveResponse(Contract):
     resolved: int
     unmapped_remaining: int
     cached: bool
+
+
+class ExplanationClaimResponse(Contract):
+    id: str
+    text: str
+    evidence_ids: list[str]
+
+
+class ProjectExplanationResponse(Contract):
+    upstream_key: str
+    status: str
+    claims: list[ExplanationClaimResponse]
+    evidence: list[dict[str, Any]]
+
+
+class ExplanationsResponse(Contract):
+    plan_id: str
+    explanations: list[ProjectExplanationResponse]

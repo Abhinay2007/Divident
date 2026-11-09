@@ -110,8 +110,8 @@ class ResolutionSnapshot:
     created_at: datetime
 
     def __post_init__(self) -> None:
-        if self.method not in {"override", "repo_url", "llm", "none"}:
-            raise ValueError("method must be override, repo_url, llm, or none")
+        if self.method not in {"override", "repo_url", "official_source", "llm", "none"}:
+            raise ValueError("method must be override, repo_url, official_source, llm, or none")
         _strict_str("upstream_key", self.upstream_key, nullable=True)
         if self.evidence is not None and (type(self.evidence) is not tuple or not all(type(item) is EvidenceItem for item in self.evidence)):
             raise TypeError("evidence must be a tuple of EvidenceItem or None")

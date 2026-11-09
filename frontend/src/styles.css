@@ -97,7 +97,6 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
 .button-primary:disabled { opacity: .68; cursor: wait; }
 .button-secondary { border-color: var(--line-strong); background: white; color: #4e574e; }
 .button-secondary:disabled { color: #7a827a; cursor: not-allowed; }
-.coming-soon { padding: 3px 4px; border: 1px solid #e2e5df; border-radius: 2px; color: #929990; font-family: var(--mono); font-size: 8px; letter-spacing: .04em; }
 .inline-error { color: #a5372a !important; }
 .panel-aside { display: flex; flex-direction: column; justify-content: center; padding: 23px 24px; border-left: 1px solid var(--line); background: #fbfcf9; }
 .aside-label { margin-bottom: 17px; color: #899188; font-size: 9px; }
@@ -251,6 +250,22 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
 .resolution-cell { display: grid; justify-items: start; gap: 5px; }
 .outcome-badge { padding: 4px 6px; border: 1px solid #dfe5dd; background: #f7f9f6; color: #637063; font-size: 9px; font-weight: 600; white-space: nowrap; }
 .outcome-resolved { border-color: #cbdccb; background: #f1f6f0; color: #2d6641; }
+.outcome-verified { border-color: #b7d6bd; background: #eaf5ec; color: #205d34; }
+.outcome-unverified { border-color: #e3c996; background: #fbf4e6; color: #805d1c; }
+.fixture-note { margin-top: 8px; padding-left: 10px; border-left: 2px solid #d8ad58; color: #74644b; font-size: 12px; }
+.evidence-details { margin-top: 6px; font-size: 11px; }
+.evidence-details summary { cursor: pointer; color: #596559; }
+.evidence-details ul { max-width: 340px; margin: 6px 0 0; padding-left: 16px; }
+.evidence-details code { overflow-wrap: anywhere; }
+.explanation-card { margin: 12px 0; padding: 18px; border: 1px solid #e2e6df; border-radius: 12px; background: #fff; }
+.explanation-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.explanation-head h3 { margin: 0; color: #344137; font: 600 15px var(--mono); overflow-wrap: anywhere; }
+.explanation-claims { display: grid; gap: 10px; margin: 14px 0; padding-left: 20px; }
+.explanation-claims p { margin: 0 0 5px; line-height: 1.55; }
+.claim-refs { display: flex; flex-wrap: wrap; gap: 5px; color: #747d73; font-size: 10px; }
+.claim-refs code { padding: 2px 4px; border-radius: 3px; background: #f2f4f0; overflow-wrap: anywhere; }
+.evidence-source-list { display: grid; gap: 5px; }
+.evidence-source-list .evidence-source > code { max-height: 110px; overflow: auto; white-space: pre-wrap; }
 .outcome-unmapped { border-color: #e8dfcb; background: #faf7ef; color: #846729; }
 .outcome-no_upstream { border-color: #e2e3df; background: #f5f5f2; color: #737a71; }
 .method-label { color: #838b82; font-size: 9px; }

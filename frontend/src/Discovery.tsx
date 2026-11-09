@@ -46,7 +46,10 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
   })
   const plan = useMutation({
     mutationFn: ({ cents, date }: { cents: number; date: string }) => createPlan(sessionId!, cents, date),
-    onSuccess: ({ id }, values) => window.location.assign(`/allocation/${id}?evaluation_date=${encodeURIComponent(values.date)}`),
+    onSuccess: ({ id, action_token }, values) => {
+      sessionStorage.setItem(`plan:${id}`, action_token)
+      window.location.assign(`/allocation/${id}?evaluation_date=${encodeURIComponent(values.date)}`)
+    },
   })
 
   function submitPlan(event: FormEvent<HTMLFormElement>) {
@@ -79,13 +82,14 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
 
   const record = session.data
   const projectList = projects.data?.projects ?? []
+  const eligibleProjects = projectList.filter((project) => project.validated)
   const sourceRows = projects.data?.sources ?? []
   const projectsByKey = new Map(projectList.map((item) => [item.upstream_key, item]))
   const isResolving = ['created', 'resolving'].includes(record.status)
 
   return <section className="discovery-page">
     <a className="back-link" href="/">← Overview</a>
-    <div className="discovery-heading discovery-heading-session"><div><div className="eyebrow">PACKAGE DISCOVERY</div><h1>Package discovery</h1><p>Binary packages are grouped by Debian source, then linked to the upstream projects returned by this session.</p></div><span className={`status-pill status-${record.status}`}><span/>{stateLabel(record.status)}</span></div>
+    <div className="discovery-heading discovery-heading-session"><div><div className="eyebrow">PACKAGE DISCOVERY</div><h1>Package discovery</h1><p>Binary packages are grouped by Debian source, then linked to the upstream projects returned by this session.</p>{record.mode === 'demo' && <p className="fixture-note">Fixture-derived session. Curl and systemd evidence is checked in for reproducibility; no live source-page request is implied.</p>}</div><span className={`status-pill status-${record.status}`}><span/>{stateLabel(record.status)}</span></div>
 
     <section className="session-panel" aria-labelledby="session-summary-title">
       <div className="session-panel-head"><div><span className="section-kicker">SESSION</span><h2 id="session-summary-title">Resolution progress</h2></div><code className="session-id">{record.id}</code></div>
@@ -93,7 +97,8 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
       <div className="session-stats" aria-label="Session summary">
         <Summary label="Source packages" value={record.source_count.toLocaleString()}/>
         <Summary label="Binary packages" value={record.binary_count === null ? 'Not supplied' : record.binary_count.toLocaleString()}/>
-        <Summary label="Upstream projects" value={projects.isPending ? '…' : projectList.length.toLocaleString()}/>
+        <Summary label="Verified projects" value={projects.isPending ? '…' : eligibleProjects.length.toLocaleString()}/>
+        <Summary label="Unverified discoveries" value={projects.isPending ? '…' : (projectList.length - eligibleProjects.length).toLocaleString()}/>
         <Summary label="Unmapped sources" value={projects.isPending ? '…' : (projects.data?.unmapped.length ?? 0).toLocaleString()}/>
         <Summary label="No upstream" value={projects.isPending ? '…' : (projects.data?.no_upstream.length ?? 0).toLocaleString()}/>
       </div>
@@ -105,7 +110,7 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
       {projects.isPending ? <div className="skeleton table-skeleton" aria-label="Loading source package mappings"/> : sourceRows.length === 0 ? <div className="empty-state"><h3>No source package details returned</h3><p>The session has no source rows to display.</p></div> : <div className="table-scroll" role="region" aria-label="Source package mappings" tabIndex={0}><table className="source-table"><thead><tr><th scope="col">Source package</th><th scope="col">Binary packages</th><th scope="col">Upstream project</th><th scope="col">Resolution</th></tr></thead><tbody>{sourceRows.map((source) => <SourceRow key={source.source_name} source={source} project={source.upstream_key ? projectsByKey.get(source.upstream_key) : undefined}/>)}</tbody></table></div>}
     </section>
 
-    {record.status === 'ready' && !projects.isPending && !projects.isError && <section className="continue-panel" aria-labelledby="continue-title"><div className="continue-copy"><span className="section-kicker">NEXT STEP</span><h2 id="continue-title">Prepare an allocation plan</h2><p>Choose a budget and evaluation date. The server builds the plan from the resolved projects.</p></div>{projectList.length === 0 ? <p className="no-eligible">No mapped upstream projects are available for an allocation plan.</p> : <form className="plan-form" onSubmit={submitPlan}>
+    {record.status === 'ready' && !projects.isPending && !projects.isError && <section className="continue-panel" aria-labelledby="continue-title"><div className="continue-copy"><span className="section-kicker">NEXT STEP</span><h2 id="continue-title">Prepare an allocation plan</h2><p>Only projects with validated upstream identity enter the deterministic allocation.</p></div>{eligibleProjects.length === 0 ? <p className="no-eligible">No verified upstream projects are eligible. Unverified discoveries remain visible above.</p> : <form className="plan-form" onSubmit={submitPlan}>
       <label>Budget (USD)<input required name="budget-usd" autoComplete="off" inputMode="decimal" type="number" min="1" max="10000" step="0.01" value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="e.g. 25.00"/></label>
       <label>Evaluation date<input required name="evaluation-date" autoComplete="off" type="date" value={evaluationDate} onChange={(event) => setEvaluationDate(event.target.value)}/></label>
       <button className="button button-primary" type="submit" disabled={plan.isPending}>{plan.isPending ? 'Preparing plan…' : 'Continue to allocation'}<span aria-hidden="true">→</span></button>
@@ -119,12 +124,12 @@ function Summary({ label, value }: { label: string; value: string }) {
 }
 
 function SourceRow({ source, project }: { source: SourceDetail; project?: Project }) {
-  const repo = project?.repository_url
+  const repo = project?.repository_url ?? source.repository_url
   const safeRepo = repo && /^https?:\/\//i.test(repo) ? repo : undefined
   return <tr>
     <th scope="row"><code>{source.source_name}</code></th>
     <td data-label="Binary packages">{source.binary_names === null ? <span className="cell-muted">Binary membership not provided</span> : source.binary_names.length ? <div className="binary-list">{source.binary_names.map((binary) => <code key={binary}>{binary}</code>)}</div> : <span className="cell-muted">No binary packages</span>}</td>
     <td data-label="Upstream project">{project ? <div className="upstream-cell"><strong>{project.display_name}</strong>{safeRepo && <a href={safeRepo} target="_blank" rel="noreferrer">{source.upstream_key}<span className="sr-only"> (opens in a new tab)</span></a>}</div> : source.outcome === 'no_upstream' ? <span className="cell-muted">No upstream project</span> : <span className="cell-muted">Not mapped</span>}</td>
-    <td data-label="Resolution"><div className="resolution-cell"><span className={`outcome-badge outcome-${source.outcome}`}>{stateLabel(source.outcome)}</span><span className="method-label">{stateLabel(source.method)}</span></div></td>
+    <td data-label="Resolution"><div className="resolution-cell"><span className={`outcome-badge outcome-${source.validated ? 'verified' : source.outcome === 'no_upstream' ? 'no_upstream' : source.upstream_key ? 'unverified' : source.outcome}`}>{source.validated ? 'Verified' : source.outcome === 'no_upstream' ? 'No upstream' : source.upstream_key ? 'Unverified' : 'Unmapped'}</span><span className="method-label">{stateLabel(source.method)}</span>{(project?.evidence ?? source.evidence ?? []).length > 0 && <details className="evidence-details"><summary>Evidence</summary><ul>{(project?.evidence ?? source.evidence ?? []).map((item, index) => <li key={`${item.field}-${index}`}><code>{item.field}</code> = <code>{item.value}</code></li>)}</ul></details>}</div></td>
   </tr>
 }

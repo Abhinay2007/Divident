@@ -35,11 +35,12 @@ export default function FundScreen({ planId }: { planId: string }) {
       <div className="session-stats allocation-stats">
         <Summary label="Plan budget" value={money(record.budget_cents)}/>
         <Summary label="Payable allocations" value={money(record.payable_total_cents)}/>
-        <Summary label="Estimated fees" value={money(record.est_payout_fees_cents)}/>
+        <Summary label="Estimated incoming fee" value={record.est_incoming_fee_cents === null ? 'Unknown' : money(record.est_incoming_fee_cents)}/>
+        <Summary label="Estimated payout fees" value={record.est_payout_fees_cents === null ? 'Unknown' : money(record.est_payout_fees_cents)}/>
         <Summary label="Funding charge" value={money(record.charge_cents)}/>
         <Summary label="Provider-confirmed capture" value={record.capture_gross_cents === null ? 'None recorded' : money(record.capture_gross_cents)}/>
       </div>
-      <p className="allocation-summary-note"><strong>{summary(record.state, uncertain, record.order_id, record.capture_gross_cents)}</strong>{record.est_payout_fees_cents === null && ' Fee inputs are not measured, so approval and capture are blocked. No order has been created.'}{record.failure_reason && ` Backend failure reason: ${record.failure_reason}.`}</p>
+      <p className="allocation-summary-note"><strong>{summary(record.state, uncertain, record.order_id, record.capture_gross_cents)}</strong>{record.est_payout_fees_cents === null && ' This plan has no payable US recipient or supported fee scope, so approval and capture are blocked.'}{record.fee_policy_version && ` Fee estimates use ${record.fee_policy_version}; actual PayPal fees are recorded from provider responses.`}{record.failure_reason && ` Backend failure reason: ${record.failure_reason}.`}</p>
     </section>
 
     <section className="continue-panel approval-panel funding-action-panel" aria-labelledby="funding-action-title">

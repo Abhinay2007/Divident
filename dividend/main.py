@@ -3,9 +3,10 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from . import models  # noqa: F401 - register all ORM metadata before startup
@@ -20,7 +21,7 @@ from .errors import (
 from .api.middleware import RequestContextMiddleware
 from .api.routes_plans import router as plans_router
 from .api.routes_sessions import router as sessions_router
-from .schemas import HealthResponse
+from .schemas import ConfigResponse, HealthResponse
 from .enrichment.fixtures import FixtureEnricher
 from .enrichment.github_client import GitHubClient
 from .enrichment.live import LiveEnricher
@@ -32,6 +33,7 @@ from .payments.paypal import PayPalProvider
 from .llm.groq_provider import GroqProvider
 from .llm.limits import LiveResolutionLimits
 from .services.payment_service import PaymentService
+from .services.config_service import ConfigService
 from .demo import seed_demo_if_empty
 
 
@@ -157,6 +159,14 @@ def create_app(
             "detail": {"errors": errors}, "request_id": request_id(request),
         })
 
+    @app.exception_handler(HTTPException)
+    async def handle_http_error(request: Request, exc: HTTPException):
+        detail = exc.detail if isinstance(exc.detail, dict) else {"message": exc.detail}
+        return JSONResponse(status_code=exc.status_code, content={
+            "error": "authentication_error" if exc.status_code == 401 else "http_error",
+            **detail, "request_id": request_id(request),
+        })
+
     @app.exception_handler(StateError)
     async def handle_state_error(request: Request, exc: StateError):
         return JSONResponse(status_code=409, content={
@@ -210,5 +220,23 @@ def create_app(
             provider_mode=configured.PAYMENTS_MODE,
             fixtures_loaded=(Path(__file__).parent / "data" / "demo_dpkg.tsv").exists(),
         )
+
+    @app.get("/config", response_model=ConfigResponse, tags=["config"])
+    async def get_config():
+        return ConfigService.get(configured)
+
+    frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    frontend_index = frontend_dist / "index.html"
+    if frontend_index.is_file():
+        app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="frontend-assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        async def serve_frontend(path: str):
+            if path == "health" or path == "api" or path.startswith("api/"):
+                raise HTTPException(status_code=404)
+            candidate = (frontend_dist / path).resolve()
+            if path and candidate.is_relative_to(frontend_dist) and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(frontend_index)
 
     return app

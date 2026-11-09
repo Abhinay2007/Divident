@@ -53,7 +53,7 @@ class FakeProvider:
     def get_order(self, order_id):
         captures = [result for request_id, result in self.captures.items()
                     if self.capture_orders[request_id] == order_id]
-        return OrderDetail(order_id, captures[:1])
+        return OrderDetail(order_id, captures[:1], "US")
 
     def create_payout_batch(self, sender_batch_id, request_id, items):
         if self.payout_error:

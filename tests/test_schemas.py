@@ -67,7 +67,7 @@ def test_response_models_serialize_and_integer_cent_fields_are_strict():
     now = datetime.now(UTC)
     money = MoneySummary(charged_now_cents=100, pledged_cents=20, fee_estimate_cents=3)
     capture = CaptureDetail(capture_id="c", gross_cents=100, fee_cents=2, net_cents=98, currency="USD", status="COMPLETED")
-    item = ItemResponse(sender_item_id="i", upstream_key="a/b", recipient_email="a@example.test", amount_cents=10, status="success", updated_at=now)
+    item = ItemResponse(sender_item_id="i", upstream_key="a/b", amount_cents=10, status="success", updated_at=now)
     batch = BatchResponse(id="b", attempt=1, status="success", fees_cents=1, items=[item])
     assert CaptureResponse(capture=capture, state="funded").model_dump()["capture"]["gross_cents"] == 100
     assert PayoutsResponse(batches=[batch]).model_dump()["batches"][0]["items"][0]["amount_cents"] == 10
@@ -103,7 +103,7 @@ def test_all_response_contracts_construct_with_documented_fields():
     assert LedgerResponse(events=[LedgerEventResponse(id="e", type="T", plan_id=None, session_id=None, external_id=None, payload={}, created_at=datetime.now(UTC))], next_cursor=None).events
     assert HealthResponse(db="ok", provider_mode="fake", fixtures_loaded=True).db == "ok"
     fees = FeeParams(order_fee_pct=None, order_fee_fixed_cents=None, payout_fee_per_item_cents=None, buffer_cents=None, tolerance_cents=0)
-    assert ConfigResponse(budget_min_cents=100, budget_max_cents=1_000_000, fee_params=fees, paypal_env="sandbox", sandbox=True, llm_live_enabled=False, cold_start_seconds=0)
+    assert ConfigResponse(budget_min_cents=100, budget_max_cents=1_000_000, fee_params=fees, paypal_env="sandbox", sandbox=True, payments_mode="fake", llm_live_enabled=False, cold_start_seconds=0)
     assert ResolveLiveResponse(resolved=1, unmapped_remaining=0, cached=False).resolved == 1
 
 

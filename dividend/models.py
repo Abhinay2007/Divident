@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -135,6 +135,7 @@ class Maintainer(Base):
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str] = mapped_column(String(256), nullable=False)
     opted_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    market_code: Mapped[str | None] = mapped_column(String(2))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
 
@@ -149,7 +150,10 @@ class Plan(Base):
     payable_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     reserved_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     est_payout_fees_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    est_incoming_fee_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     charge_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fee_policy_version: Mapped[str | None] = mapped_column(String(64))
+    fee_policy_snapshot: Mapped[dict | None] = mapped_column(JSON)
     order_id: Mapped[str | None] = mapped_column(String(64))
     approval_url: Mapped[str | None] = mapped_column(String(512))
     order_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -200,6 +204,7 @@ class PayoutBatch(Base):
     external_id: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="intent")
     fees_cents: Mapped[int | None] = mapped_column(Integer)
+    estimated_fees_cents: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
     plan: Mapped["Plan"] = relationship(back_populates="payout_batches")
@@ -223,10 +228,62 @@ class PayoutItem(Base):
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     external_id: Mapped[str | None] = mapped_column(String(64))
+    failure_reason: Mapped[str | None] = mapped_column(String(512))
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow, onupdate=_utcnow)
 
     batch: Mapped["PayoutBatch"] = relationship(back_populates="items")
     plan: Mapped["Plan"] = relationship(back_populates="payout_items")
+
+
+class PaymentOperation(Base):
+    """Durable identity and outcome for one external payment operation attempt."""
+
+    __tablename__ = "payment_operations"
+    __table_args__ = (
+        CheckConstraint("kind IN ('order', 'capture', 'payout')", name="ck_payment_operations_kind"),
+        CheckConstraint("attempt > 0", name="ck_payment_operations_attempt_positive"),
+        CheckConstraint(
+            "state IN ('intent', 'submitting', 'confirmed', 'rejected', 'unknown', 'resolved', 'cancelled')",
+            name="ck_payment_operations_state",
+        ),
+        CheckConstraint(
+            "(kind = 'payout' AND payout_batch_id IS NOT NULL) OR "
+            "(kind IN ('order', 'capture') AND payout_batch_id IS NULL)",
+            name="ck_payment_operations_batch_kind",
+        ),
+        CheckConstraint(
+            "kind = 'payout' OR prior_plan_state IS NULL",
+            name="ck_payment_operations_prior_state_kind",
+        ),
+        CheckConstraint(
+            "prior_plan_state IS NULL OR prior_plan_state IN ('funded', 'settled_with_exceptions')",
+            name="ck_payment_operations_prior_state",
+        ),
+        UniqueConstraint("plan_id", "kind", "attempt", name="uq_payment_operations_plan_kind_attempt"),
+        UniqueConstraint("request_id", name="uq_payment_operations_request_id"),
+        UniqueConstraint("payout_batch_id", name="uq_payment_operations_payout_batch"),
+        Index(
+            "uq_payment_operations_active_kind", "plan_id", "kind", unique=True,
+            sqlite_where=text("state IN ('intent', 'submitting', 'unknown')"),
+            postgresql_where=text("state IN ('intent', 'submitting', 'unknown')"),
+        ),
+        Index("ix_payment_operations_plan_kind", "plan_id", "kind", "attempt"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(128))
+    payout_batch_id: Mapped[str | None] = mapped_column(ForeignKey("payout_batches.id"))
+    provider_result: Mapped[dict | None] = mapped_column(JSON)
+    prior_plan_state: Mapped[str | None] = mapped_column(String(32))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow, onupdate=_utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class LedgerEvent(Base):

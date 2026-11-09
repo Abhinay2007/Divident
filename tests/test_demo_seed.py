@@ -86,23 +86,49 @@ def test_demo_relationships_eligibility_and_plan_creation(factory):
         by_source = {r.source_name: r for r in resolutions}
         assert by_source["linux-signed-amd64"].outcome == "no_upstream"
         assert by_source["libxcb-doc"].outcome == "unmapped"
+        assert by_source["curl"].method == "official_source" and by_source["curl"].validated is True
+        assert by_source["systemd"].method == "official_source" and by_source["systemd"].validated is True
+        assert by_source["bash"].validated is False
+        verified_keys = {row.upstream_key for row in resolutions if row.validated}
+        assert len(verified_keys) == 8
         assert any(value is True for value in maintainers.values())
         assert any(value is False for value in maintainers.values())
         assert set(project_by_key) - set(maintainers)  # missing maintainer is reserved
         assert len({tuple(sorted(project.need_signals.items())) for project in projects}) > 1
 
-        plan = PlanService.create(db, session.id, 2500, date(2026, 11, 6))
+        plan = PlanService.create(db, session.id, 10000, date(2026, 11, 6))
         lines = db.scalars(select(PlanLine).where(PlanLine.plan_id == plan.id)).all()
-        assert sum(line.amount_cents for line in lines) == 2500
-        assert any(line.payable_cents > 0 for line in lines)
+        assert sum(line.amount_cents for line in lines) == 10000
+        assert {line.upstream_key for line in lines} <= verified_keys
+        # Synthetic example.invalid identities have no explicit US market and
+        # therefore cannot be used as payout recipients.
+        assert all(line.payable_cents == 0 for line in lines)
         assert any(line.reserved_cents > 0 for line in lines)
-        assert all(line.payable_cents > 0 if maintainers.get(line.upstream_key, False)
-                   else line.payable_cents == 0 for line in lines)
-        assert all(line.reserved_cents == 0 if maintainers.get(line.upstream_key, False)
-                   else line.reserved_cents == line.amount_cents for line in lines)
+        assert all(line.reserved_cents == line.amount_cents for line in lines)
         assert plan.charge_cents is None
-        assert plan.est_payout_fees_cents is None
+        assert plan.est_payout_fees_cents == 0
         assert plan.state == "draft"
         assert plan.order_id is None
         assert db.scalar(select(func.count()).select_from(PayoutBatch)) == 0
         assert db.scalar(select(func.count()).select_from(PayoutItem)) == 0
+
+
+def test_explicit_sandbox_recipient_is_marked_us_and_only_seeded_once(factory, tmp_path):
+    recipients = tmp_path / "recipients.yaml"
+    recipients.write_text(
+        "schema: 2\nrecipients:\n"
+        "  salsa.debian.org/apt-team/apt:\n"
+        "    email: sandbox-recipient@example.test\n    market_code: US\n",
+        encoding="utf-8",
+    )
+    assert seed_demo_if_empty(factory, recipients)
+    with factory() as db:
+        selected = db.scalar(select(Maintainer).where(
+            Maintainer.upstream_key == "salsa.debian.org/apt-team/apt"
+        ))
+        others = list(db.scalars(select(Maintainer).where(
+            Maintainer.upstream_key != "salsa.debian.org/apt-team/apt"
+        )))
+        assert selected.market_code == "US"
+        assert selected.email == "sandbox-recipient@example.test"
+        assert all(row.market_code is None for row in others)

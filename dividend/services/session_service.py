@@ -295,6 +295,10 @@ class SessionService:
                 upstream_key=resolution_by_name[name].upstream_key if name in resolution_by_name else None,
                 method=resolution_by_name[name].method if name in resolution_by_name else "none",
                 outcome=resolution_by_name[name].outcome if name in resolution_by_name else "unmapped",
+                validated=resolution_by_name[name].validated if name in resolution_by_name else False,
+                evidence=resolution_by_name[name].evidence if name in resolution_by_name else None,
+                repository_url=(resolution_by_name[name].evidence or [{}])[0].get("value")
+                    if name in resolution_by_name and resolution_by_name[name].method == "repo_url" else None,
             )
             for name in sorted(known_sources)
         ]
@@ -306,6 +310,9 @@ class SessionService:
                 upstream_key=project.upstream_key,
                 display_name=project.display_name,
                 repository_url=project.repository_url,
+                validated=all(resolution_by_name[name].validated for name in project.source_names),
+                evidence=[item for name in sorted(project.source_names)
+                          for item in (resolution_by_name[name].evidence or [])],
                 binary_count=project.binary_count,
                 source_names=sorted(project.source_names),
                 need_signals=project.need_signals,
@@ -355,7 +362,9 @@ class SessionService:
             text_valid = fact is None or all(
                 value is None or type(value) is str
                 for value in (fact.repository_url, fact.homepage, fact.donation, fact.contact,
-                              fact.github_owner_login, fact.github_parent_full_name)
+                              fact.github_owner_login, fact.github_parent_full_name,
+                              fact.official_repository_url, fact.official_project_source_url,
+                              fact.official_provenance)
             )
             valid_date = True
             if fact and fact.github and fact.github.last_commit:
@@ -394,18 +403,18 @@ class SessionService:
         for proposal in proposals:
             old = mappings[proposal.source_name]
             mappings[proposal.source_name] = type(old)(proposal.source_name, proposal.upstream_key, "llm",
-                                                       proposal.evidence, "resolved")
+                                                       proposal.evidence, "resolved", True)
 
         resolutions = {row.source_name: row for row in db.scalars(
             select(SourceResolution).where(SourceResolution.session_id == session_id))}
         for name, mapping in mappings.items():
             row = resolutions[name]
             if row.method == "llm" and row.validated:
-                mappings[name] = type(mapping)(name, row.upstream_key, row.method, row.evidence or [], "resolved")
+                mappings[name] = type(mapping)(name, row.upstream_key, row.method, row.evidence or [], "resolved", row.validated)
                 continue
             row.upstream_key, row.method, row.outcome = mapping.upstream_key, mapping.method, mapping.outcome
             row.evidence = mapping.evidence or None
-            row.validated = mapping.method == "llm"
+            row.validated = mapping.validated
             row.cached = name in cached_sources
 
         by_key: dict[str, list[str]] = {}

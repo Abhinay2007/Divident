@@ -34,6 +34,9 @@
       "repository_url": "https://git.savannah.gnu.org/git/coreutils.git"
     },
     "curl": {
+      "official_project_source_url": "https://curl.se/dev/source.html",
+      "official_repository_url": "https://github.com/curl/curl",
+      "official_provenance": "reviewed-link:demo-fixture-v1",
       "github": {
         "archived": false,
         "committers_12m": 3,
@@ -117,6 +120,9 @@
       "repository_url": "https://github.com/sqlite/sqlite.git"
     },
     "systemd": {
+      "official_project_source_url": "https://systemd.io/BACKPORTS/",
+      "official_repository_url": "https://github.com/systemd/systemd",
+      "official_provenance": "reviewed-link:demo-fixture-v1",
       "github": {
         "archived": false,
         "committers_12m": 20,

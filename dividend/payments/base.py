@@ -24,6 +24,7 @@ class CaptureResult:
 class OrderDetail:
     order_id: str
     captures: list[CaptureResult]
+    payer_country_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,7 @@ class ItemDetail:
     external_id: str | None
     raw_status: str
     amount_cents: int
+    failure_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

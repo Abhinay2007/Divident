@@ -14,6 +14,8 @@ from ..allocation.snapshot import build_facts_snapshot
 from ..errors import CaptureMismatch, NotFoundError, StateError, ValidationError
 from ..ledger import LedgerService, append as append_ledger_event
 from ..models import Maintainer, Plan, PlanLine, Session, SourceResolution, UpstreamProject
+from ..payments.fees import (ROUNDING_POLICY, calculate_gross_charge_cents,
+                             estimate_payout_fee_cents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +83,7 @@ class PlanService:
                     f"duplicate resolution for source {resolution.source_name!r}"
                 )
             if type(resolution.method) is not str or resolution.method not in {
-                "override", "repo_url", "llm", "none"
+                "override", "repo_url", "official_source", "llm", "none"
             }:
                 raise AllocationError(
                     f"invalid resolution method for source {resolution.source_name!r}"
@@ -111,6 +113,15 @@ class PlanService:
 
         if set(resolution_by_source) != session_source_names:
             raise AllocationError("session is missing one or more source resolutions")
+
+        # A candidate mapping is useful in discovery, but only validator-approved
+        # identities may influence a funding decision.
+        projects = [project for project in projects if project.source_names and all(
+            resolution_by_source.get(name) is not None
+            and resolution_by_source[name].upstream_key == project.upstream_key
+            and resolution_by_source[name].validated is True
+            for name in project.source_names
+        )]
 
         project_by_key: dict[str, UpstreamProject] = {}
         source_owner: dict[str, str] = {}
@@ -152,10 +163,10 @@ class PlanService:
                     )
 
         for source_name, resolution in resolution_by_source.items():
-            if resolution.method == "none":
+            if resolution.method == "none" or resolution.validated is not True:
                 if source_name in source_owner:
                     raise AllocationError(
-                        f"no-upstream source {source_name!r} is included in a project"
+                        f"ineligible source {source_name!r} is included in a project"
                     )
                 continue
             matching_project = project_by_key.get(resolution.upstream_key)
@@ -174,6 +185,12 @@ class PlanService:
             )
         ).all()
         opted_in_by_key: dict[str, bool] = {}
+        market_rows = db.execute(
+            select(Maintainer.upstream_key, Maintainer.market_code).where(
+                Maintainer.upstream_key.in_(project_keys)
+            )
+        ).all()
+        market_by_key = dict(market_rows)
         for upstream_key, opted_in in maintainer_rows:
             if upstream_key in opted_in_by_key:
                 raise AllocationError(f"duplicate maintainer for {upstream_key!r}")
@@ -206,7 +223,8 @@ class PlanService:
                     display_name=project.display_name,
                     binary_count=project.binary_count,
                     facts=facts,
-                    opted_in=opted_in_by_key.get(project.upstream_key, False),
+                    opted_in=(opted_in_by_key.get(project.upstream_key, False)
+                              and market_by_key.get(project.upstream_key) == "US"),
                 ))
             except (TypeError, ValueError) as exc:
                 raise AllocationError(
@@ -221,6 +239,7 @@ class PlanService:
         session_id: str,
         budget_cents: int,
         evaluation_date: date,
+        policy_path=None,
     ) -> Plan:
         """Create a draft plan and its lines/event inside one caller-owned transaction.
 
@@ -236,8 +255,13 @@ class PlanService:
         inputs = PlanService.assemble_allocation_inputs(db, session_id, evaluation_date)
         if not inputs.projects:
             raise AllocationError("session has no eligible upstream projects")
-        policy = load_allocation_policy()
+        policy = load_allocation_policy(policy_path) if policy_path is not None else load_allocation_policy()
         result = allocate(list(inputs.projects), budget_cents, policy, inputs.evaluation_date)
+        estimates = PlanService._fee_calculation(
+            result.payable_total_cents,
+            sum(line.payable_cents > 0 for line in result.lines),
+            policy.fees,
+        )
 
         # The allocator emits canonical upstream-key order. Keep that ordering
         # explicit at persistence even if its result implementation changes.
@@ -248,10 +272,11 @@ class PlanService:
             budget_cents=budget_cents,
             payable_total_cents=result.payable_total_cents,
             reserved_total_cents=result.reserved_total_cents,
-            est_payout_fees_cents=result.est_payout_fees_cents,
-            # No charge formula is accepted while the required fee estimates
-            # are unavailable; keep the estimate unknown.
-            charge_cents=None,
+            est_payout_fees_cents=estimates["estimated_payout_fee_cents"],
+            est_incoming_fee_cents=estimates["estimated_incoming_fee_cents"],
+            charge_cents=estimates["gross_charge_cents"],
+            fee_policy_version=policy.fees.version,
+            fee_policy_snapshot=estimates,
         )
 
         connection = db.connection()
@@ -290,6 +315,9 @@ class PlanService:
                 plan_id=plan.id,
                 session_id=session_id,
             )
+            append_ledger_event(
+                db, "FEE_ESTIMATED", estimates, plan_id=plan.id, session_id=session_id
+            )
             db.flush()
         return plan
 
@@ -299,6 +327,7 @@ class PlanService:
         plan_id: str,
         budget_cents: int,
         evaluation_date: date,
+        policy_path=None,
     ) -> Plan:
         """Recalculate a draft plan atomically, leaving commit ownership to caller."""
         if type(plan_id) is not str or not plan_id:
@@ -325,8 +354,13 @@ class PlanService:
         )
         if not inputs.projects:
             raise AllocationError("session has no eligible upstream projects")
-        policy = load_allocation_policy()
+        policy = load_allocation_policy(policy_path) if policy_path is not None else load_allocation_policy()
         result = allocate(list(inputs.projects), budget_cents, policy, inputs.evaluation_date)
+        estimates = PlanService._fee_calculation(
+            result.payable_total_cents,
+            sum(line.payable_cents > 0 for line in result.lines),
+            policy.fees,
+        )
         lines = sorted(result.lines, key=lambda line: line.upstream_key)
 
         connection = db.connection()
@@ -347,8 +381,11 @@ class PlanService:
                     budget_cents=budget_cents,
                     payable_total_cents=result.payable_total_cents,
                     reserved_total_cents=result.reserved_total_cents,
-                    est_payout_fees_cents=result.est_payout_fees_cents,
-                    charge_cents=None,
+                    est_payout_fees_cents=estimates["estimated_payout_fee_cents"],
+                    est_incoming_fee_cents=estimates["estimated_incoming_fee_cents"],
+                    charge_cents=estimates["gross_charge_cents"],
+                    fee_policy_version=policy.fees.version,
+                    fee_policy_snapshot=estimates,
                 )
                 .execution_options(synchronize_session="fetch")
             )
@@ -394,9 +431,51 @@ class PlanService:
                 plan_id=plan_id,
                 session_id=plan.session_id,
             )
+            append_ledger_event(db, "FEE_ESTIMATED", estimates, plan_id=plan_id,
+                                session_id=plan.session_id)
             db.flush()
             db.expire(plan, ["lines"])
         return plan
+
+    @staticmethod
+    def _fee_calculation(target_distribution_cents: int, item_count: int, fees) -> dict:
+        supported = fees.measured and fees.supports_standard_us_usd
+        payout_fee = estimate_payout_fee_cents(item_count) if supported else None
+        charge = incoming = None
+        if supported and target_distribution_cents > 0:
+            charge, incoming = calculate_gross_charge_cents(
+                target_distribution_cents, payout_fee, fees.buffer_cents or 0
+            )
+        return {
+            "version": fees.version,
+            "scope": {
+                "merchant_market": fees.merchant_market,
+                "payer_market_assumption": fees.payer_market_assumption,
+                "recipient_market": fees.recipient_market,
+                "currency": fees.currency,
+                "checkout_method": fees.checkout_method,
+                "payout_method": fees.payout_method,
+                "pricing_tier": fees.pricing_tier,
+                "currency_conversion": fees.currency_conversion,
+                "micropayments": fees.micropayments,
+                "charity_pricing": fees.charity_pricing,
+                "negotiated_rates": fees.negotiated_rates,
+            },
+            "assumptions": {
+                "incoming_percentage": str(fees.order_fee_pct) if supported else None,
+                "incoming_fixed_cents": fees.order_fee_fixed_cents if supported else None,
+                "payout_fee_per_item_cents": fees.payout_fee_per_item_cents if supported else None,
+                "buffer_cents": fees.buffer_cents if supported else None,
+                "tolerance_cents": fees.tolerance_cents,
+                "rounding_policy": ROUNDING_POLICY if supported else None,
+            },
+            "target_distribution_cents": target_distribution_cents,
+            "payout_item_count": item_count,
+            "estimated_payout_fee_cents": payout_fee,
+            "estimated_incoming_fee_cents": incoming,
+            "gross_charge_cents": charge,
+            "supported": supported,
+        }
 
     @staticmethod
     def get(db: DbSession, plan_id: str) -> Plan:
@@ -470,7 +549,9 @@ class PlanService:
                                       payload, additional_events=additional_events)
 
     @staticmethod
-    def mark_captured(db: DbSession, plan_id: str, capture, tolerance_cents: int) -> Plan:
+    def mark_captured(db: DbSession, plan_id: str, capture,
+                      tolerance_cents: int | None = None, *,
+                      payer_market_code: str | None = None) -> Plan:
         plan = PlanService.get(db, plan_id)
         if plan.state != "funding":
             raise StateError("Plan is not awaiting capture", code="invalid_plan_transition",
@@ -500,24 +581,53 @@ class PlanService:
             })
             return plan
 
-        required = plan.payable_total_cents + plan.est_payout_fees_cents
-        plan.capture_gross_cents, plan.capture_fee_cents, plan.capture_net_cents = amounts
-        if capture.net_cents < required - tolerance_cents:
-            plan.failure_reason = "FUNDING_SHORTFALL"
-            PlanService.transition(db, plan_id, "funding", "failed", "FUNDING_SHORTFALL", {
-                "required_cents": required, "net_cents": capture.net_cents,
-                "tolerance_cents": tolerance_cents,
+        if not isinstance(plan.fee_policy_snapshot, dict):
+            raise ValidationError("Plan has no frozen fee policy snapshot", code="fee_policy_unavailable")
+        tolerance = plan.fee_policy_snapshot.get("assumptions", {}).get("tolerance_cents")
+        if type(tolerance) is not int or tolerance < 0:
+            raise ValidationError("Plan fee policy snapshot has invalid tolerance", code="fee_policy_unavailable")
+        if tolerance_cents is not None and tolerance_cents != tolerance:
+            raise ValidationError("Current fee policy differs from the frozen plan",
+                                  code="fee_policy_version_mismatch")
+        if payer_market_code != "US":
+            plan.failure_reason = "UNSUPPORTED_MARKET"
+            plan.capture_gross_cents, plan.capture_fee_cents, plan.capture_net_cents = amounts
+            PlanService.transition(db, plan_id, "funding", "failed",
+                                   "UNSUPPORTED_TRANSACTION_SCOPE", {
+                "capture_id": capture.capture_id,
+                "payer_market_code": payer_market_code,
+                "gross_cents": capture.gross_cents,
+                "fee_cents": capture.fee_cents,
+                "net_cents": capture.net_cents,
             }, additional_events=[{"type": "ORDER_CAPTURED", "payload": {
                 "capture_id": capture.capture_id, "gross_cents": capture.gross_cents,
                 "fee_cents": capture.fee_cents, "net_cents": capture.net_cents,
+            }, "external_id": capture.capture_id}, {"type": "FEE_ACTUALIZED", "payload": {
+                "estimated_cents": plan.est_incoming_fee_cents,
+                "actual_cents": capture.fee_cents, "net_cents": capture.net_cents,
+            }, "external_id": capture.capture_id}])
+            return plan
+        required = plan.payable_total_cents + plan.est_payout_fees_cents
+        plan.capture_gross_cents, plan.capture_fee_cents, plan.capture_net_cents = amounts
+        if capture.net_cents < required - tolerance:
+            plan.failure_reason = "FUNDING_SHORTFALL"
+            PlanService.transition(db, plan_id, "funding", "failed", "FUNDING_SHORTFALL", {
+                "required_cents": required, "net_cents": capture.net_cents,
+                "tolerance_cents": tolerance,
+            }, additional_events=[{"type": "ORDER_CAPTURED", "payload": {
+                "capture_id": capture.capture_id, "gross_cents": capture.gross_cents,
+                "fee_cents": capture.fee_cents, "net_cents": capture.net_cents,
+            }, "external_id": capture.capture_id}, {"type": "FEE_ACTUALIZED", "payload": {
+                "estimated_cents": plan.est_incoming_fee_cents,
+                "actual_cents": capture.fee_cents, "net_cents": capture.net_cents,
             }, "external_id": capture.capture_id}])
             return plan
 
         events = [{"type": "FEE_ACTUALIZED", "payload": {
-            "estimated_cents": plan.charge_cents - plan.payable_total_cents,
-            "actual_cents": capture.fee_cents,
+            "estimated_cents": plan.est_incoming_fee_cents,
+            "actual_cents": capture.fee_cents, "net_cents": capture.net_cents,
         }, "external_id": capture.capture_id}]
-        if capture.net_cents > required + tolerance_cents:
+        if capture.net_cents > required + tolerance:
             events.append({"type": "SURPLUS_RETAINED", "payload": {
                 "amount_cents": capture.net_cents - required,
             }, "external_id": capture.capture_id})

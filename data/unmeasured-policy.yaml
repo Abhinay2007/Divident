@@ -1,0 +1,32 @@
+# Published standard US pricing assumptions; estimates, not account-specific quotes.
+# https://www.paypal.com/us/business/paypal-business-fees
+# https://developer.paypal.com/payouts/fees/
+measured: false
+fees:
+  order_fee_pct: 3.49
+  order_fee_fixed_cents: 49
+  payout_fee_per_item_cents: 25
+  buffer_cents: 0
+  tolerance_cents: 5
+  version: paypal-us-standard-v1
+  merchant_market: US
+  payer_market_assumption: US
+  recipient_market: US
+  currency: USD
+  checkout_method: standard_paypal_checkout
+  payout_method: paypal_payouts_api
+  pricing_tier: standard
+  currency_conversion: false
+  micropayments: false
+  charity_pricing: false
+  negotiated_rates: false
+allocation:
+  max_binaries_cap: 50
+  per_project_cap_pct: 15
+  min_line_cents: 100
+need_factor:
+  archived: 0.5
+  inactive_12m: 0.8
+  committers_1: 1.5
+  committers_2_5: 1.2
+  committers_6_plus: 1.0

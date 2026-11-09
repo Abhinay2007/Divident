@@ -31,12 +31,12 @@ class GroqProvider:
                     temperature=0,
                     timeout=timeout,
                     response_format={"type": "json_schema", "json_schema": {
-                        "name": "upstream_proposals", "schema": schema, "strict": True,
+                        "name": "structured_response", "schema": schema, "strict": True,
                     }},
                 )
                 content = response.choices[0].message.content
                 parsed = json.loads(content)
-                if type(parsed) is not dict or type(parsed.get("proposals")) is not list:
+                if type(parsed) is not dict:
                     raise ValueError("unexpected JSON shape")
                 return parsed
             except Exception as exc:

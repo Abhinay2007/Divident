@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-import yaml
 from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -63,7 +62,7 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
-    def validate_mode_credentials_and_policy(self):
+    def validate_mode_credentials(self):
         if self.PAYMENTS_MODE == "paypal":
             missing = [name for name, value in (
                 ("PAYPAL_CLIENT_ID", self.PAYPAL_CLIENT_ID),
@@ -71,14 +70,6 @@ class Settings(BaseSettings):
             ) if not value or not value.strip()]
             if missing:
                 raise ValueError("PayPal mode requires: " + ", ".join(missing))
-            try:
-                with self.allocation_policy_path.open(encoding="utf-8") as policy_file:
-                    policy = yaml.safe_load(policy_file)
-            except OSError:
-                raise ValueError("Allocation policy file could not be read") from None
-            if not isinstance(policy, dict) or policy.get("measured") is not True:
-                raise ValueError("PayPal mode requires a measured allocation policy")
-
         if self.LLM_LIVE_ENABLED and not self.LLM_KILL_SWITCH and not self.GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY is required when LLM_LIVE_ENABLED is true")
         if self.ENRICH_MODE == "live":

@@ -1,22 +1,22 @@
 """Allocation plan read, draft adjustment, creation, and approval routes."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session as DbSession
 
 from ..models import Plan
 from ..schemas import (
     ApproveResponse, CaptureResponse, MoneySummary, PlanBudgetPatchRequest,
     PlanCreateRequest, PlanLineResponse, PlanResponse, PayoutResponse,
-    PayoutsResponse,
+    PayoutsResponse, ExplanationsResponse,
 )
-from ..services import PlanService
-from .deps import get_db, get_payment_service
+from ..services import ExplanationService, PlanService
+from .deps import get_db, get_payment_service, plan_access_token, require_plan_access
 
 
 router = APIRouter(prefix="/api", tags=["plans"])
 
 
-def _plan_response(plan: Plan) -> PlanResponse:
+def _plan_response(plan: Plan, action_token: str | None = None) -> PlanResponse:
     lines = [
         PlanLineResponse(
             upstream_key=line.upstream_key,
@@ -38,6 +38,8 @@ def _plan_response(plan: Plan) -> PlanResponse:
         payable_total_cents=plan.payable_total_cents,
         reserved_total_cents=plan.reserved_total_cents,
         est_payout_fees_cents=plan.est_payout_fees_cents,
+        est_incoming_fee_cents=plan.est_incoming_fee_cents,
+        fee_policy_version=plan.fee_policy_version,
         charge_cents=plan.charge_cents,
         order_id=plan.order_id,
         order_attempt=plan.order_attempt,
@@ -54,6 +56,7 @@ def _plan_response(plan: Plan) -> PlanResponse:
             pledged_cents=plan.reserved_total_cents,
             fee_estimate_cents=plan.est_payout_fees_cents,
         ),
+        action_token=action_token,
     )
 
 
@@ -61,60 +64,79 @@ def _plan_response(plan: Plan) -> PlanResponse:
 async def create_plan(
     session_id: str,
     request: PlanCreateRequest,
+    http_request: Request,
     db: DbSession = Depends(get_db),
 ):
-    return _plan_response(PlanService.create(
-        db, session_id, request.budget_cents, request.evaluation_date
-    ))
+    policy_path = http_request.app.state.settings.allocation_policy_path
+    if not policy_path.exists():
+        policy_path = None
+    plan = PlanService.create(db, session_id, request.budget_cents,
+                              request.evaluation_date, policy_path)
+    token = plan_access_token(http_request.app.state.settings.ADMIN_TOKEN, plan.id)
+    return _plan_response(plan, token)
 
 
 @router.get("/plans/{plan_id}", response_model=PlanResponse)
-async def get_plan(plan_id: str, db: DbSession = Depends(get_db)):
+async def get_plan(plan_id: str, db: DbSession = Depends(get_db), _: None = Depends(require_plan_access)):
     return _plan_response(PlanService.get(db, plan_id))
+
+
+@router.get("/plans/{plan_id}/explanations", response_model=ExplanationsResponse)
+async def get_plan_explanations(
+    plan_id: str, request: Request, db: DbSession = Depends(get_db),
+    _: None = Depends(require_plan_access),
+):
+    return ExplanationService.get_plan_explanations(db, plan_id, request.app.state.llm)
 
 
 @router.patch("/plans/{plan_id}/budget", response_model=PlanResponse)
 async def adjust_budget(
     plan_id: str,
     request: PlanBudgetPatchRequest,
+    http_request: Request,
     db: DbSession = Depends(get_db),
+    _: None = Depends(require_plan_access),
 ):
+    policy_path = http_request.app.state.settings.allocation_policy_path
+    if not policy_path.exists():
+        policy_path = None
     return _plan_response(PlanService.adjust_budget(
-        db, plan_id, request.budget_cents, request.evaluation_date
+        db, plan_id, request.budget_cents, request.evaluation_date,
+        policy_path,
     ))
 
 
 @router.post("/plans/{plan_id}/approve", response_model=ApproveResponse)
-async def approve_plan(plan_id: str, db: DbSession = Depends(get_db), service=Depends(get_payment_service)):
+async def approve_plan(plan_id: str, db: DbSession = Depends(get_db), service=Depends(get_payment_service), _: None = Depends(require_plan_access)):
     return service.approve_and_fund(plan_id, db)
 
 
 @router.post("/plans/{plan_id}/capture", response_model=CaptureResponse)
-async def capture_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+async def capture_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db), _: None = Depends(require_plan_access)):
     return service.capture(plan_id, db)
 
 
 @router.post("/plans/{plan_id}/payout", response_model=PayoutResponse)
-async def payout_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+async def payout_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db), _: None = Depends(require_plan_access)):
     return service.payout(plan_id, db)
 
 
 @router.post("/plans/{plan_id}/payout/retry", response_model=PayoutResponse)
-async def retry_payout_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+async def retry_payout_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db), _: None = Depends(require_plan_access)):
     return service.retry_payout(plan_id, db)
 
 
 @router.post("/plans/{plan_id}/reconcile", response_model=PayoutsResponse)
-async def reconcile_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+async def reconcile_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db), _: None = Depends(require_plan_access)):
     return service.reconcile(plan_id, db)
 
 
 @router.get("/plans/{plan_id}/payouts", response_model=PayoutsResponse)
-async def get_payouts(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+async def get_payouts(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db), _: None = Depends(require_plan_access)):
     return service.get_payouts(plan_id, db)
 
 
 @router.post("/plans/{plan_id}/cancel", status_code=200)
-async def cancel_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db)):
+async def cancel_plan(plan_id: str, service=Depends(get_payment_service), db: DbSession = Depends(get_db), _: None = Depends(require_plan_access)):
     service.cancel(plan_id, db)
     return {"state": "cancelled"}

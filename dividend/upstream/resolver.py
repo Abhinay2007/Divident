@@ -32,7 +32,6 @@ def _fact_values(fact: FactSet) -> dict:
         "source_name": fact.source_name,
         "udd.repository": fact.repository_url,
         "udd.homepage": fact.homepage,
-        "udd.contact": fact.contact,
         "github.full_name": fact.github.full_name if fact.github else None,
         "github.owner_login": fact.github_owner_login,
         "github.parent_full_name": fact.github_parent_full_name,

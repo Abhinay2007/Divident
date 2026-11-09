@@ -1,4 +1,18 @@
 no_upstream:
   - linux-signed-*
   - linux-latest*
-families: {}
+# Reviewed fixture mappings provide deterministic coverage when live UDD is unavailable.
+# Bash is intentionally omitted until its upstream source evidence is reviewed.
+families:
+  git.savannah.gnu.org/git/coreutils:
+    - coreutils
+  sourceware.org/git/glibc:
+    - glibc
+  github.com/openssl/openssl:
+    - openssl
+  github.com/sqlite/sqlite:
+    - sqlite
+  github.com/madler/zlib:
+    - zlib
+  gitlab.freedesktop.org/xorg/lib/libxcb:
+    - libxcb

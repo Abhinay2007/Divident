@@ -127,6 +127,18 @@ class FeePolicy:
     payout_fee_per_item_cents: int | None
     buffer_cents: int | None
     tolerance_cents: int
+    version: str = "unversioned"
+    merchant_market: str | None = None
+    payer_market_assumption: str | None = None
+    recipient_market: str | None = None
+    currency: str | None = None
+    checkout_method: str | None = None
+    payout_method: str | None = None
+    pricing_tier: str | None = None
+    currency_conversion: bool = False
+    micropayments: bool = False
+    charity_pricing: bool = False
+    negotiated_rates: bool = False
 
     def __post_init__(self) -> None:
         if type(self.measured) is not bool:
@@ -143,6 +155,14 @@ class FeePolicy:
             if amount is not None:
                 _strict_int(field, amount, minimum=0)
         _strict_int("tolerance_cents", self.tolerance_cents, minimum=0)
+        for field in ("version", "merchant_market", "payer_market_assumption", "recipient_market",
+                      "currency", "checkout_method", "payout_method", "pricing_tier"):
+            value = getattr(self, field)
+            if value is not None and (type(value) is not str or not value.strip()):
+                raise ValueError(f"{field} must be a nonempty string or null")
+        for field in ("currency_conversion", "micropayments", "charity_pricing", "negotiated_rates"):
+            if type(getattr(self, field)) is not bool:
+                raise TypeError(f"{field} must be a bool")
         if self.measured:
             required = (
                 "order_fee_pct", "order_fee_fixed_cents",
@@ -153,6 +173,22 @@ class FeePolicy:
                 raise ValueError(
                     "measured fee policy requires non-null: " + ", ".join(missing)
                 )
+
+    @property
+    def supports_standard_us_usd(self) -> bool:
+        return (
+            self.version == "paypal-us-standard-v1"
+            and self.merchant_market == self.payer_market_assumption == self.recipient_market == "US"
+            and self.currency == "USD"
+            and self.checkout_method == "standard_paypal_checkout"
+            and self.payout_method == "paypal_payouts_api"
+            and self.pricing_tier == "standard"
+            and not any((self.currency_conversion, self.micropayments,
+                         self.charity_pricing, self.negotiated_rates))
+            and self.order_fee_pct == Decimal("3.49")
+            and self.order_fee_fixed_cents == 49
+            and self.payout_fee_per_item_cents == 25
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,7 +287,10 @@ def _build_policy(raw: object) -> AllocationPolicy:
     fee_values = _require_mapping("fees", root["fees"])
     _check_keys("fees", fee_values, {
         "order_fee_pct", "order_fee_fixed_cents", "payout_fee_per_item_cents",
-        "buffer_cents", "tolerance_cents",
+        "buffer_cents", "tolerance_cents", "version", "merchant_market",
+        "payer_market_assumption", "recipient_market", "currency", "checkout_method",
+        "payout_method", "pricing_tier", "currency_conversion", "micropayments",
+        "charity_pricing", "negotiated_rates",
     })
     allocation_values = _require_mapping("allocation", root["allocation"])
     _check_keys("allocation", allocation_values, {
@@ -284,6 +323,18 @@ def _build_policy(raw: object) -> AllocationPolicy:
                 _read_int("fees.buffer_cents", fee_values["buffer_cents"], minimum=0)
             ),
             tolerance_cents=_read_int("fees.tolerance_cents", fee_values["tolerance_cents"], minimum=0),
+            version=fee_values["version"],
+            merchant_market=fee_values["merchant_market"],
+            payer_market_assumption=fee_values["payer_market_assumption"],
+            recipient_market=fee_values["recipient_market"],
+            currency=fee_values["currency"],
+            checkout_method=fee_values["checkout_method"],
+            payout_method=fee_values["payout_method"],
+            pricing_tier=fee_values["pricing_tier"],
+            currency_conversion=fee_values["currency_conversion"],
+            micropayments=fee_values["micropayments"],
+            charity_pricing=fee_values["charity_pricing"],
+            negotiated_rates=fee_values["negotiated_rates"],
         )
         allocation = AllocationRules(
             max_binaries_cap=_read_int("allocation.max_binaries_cap", allocation_values["max_binaries_cap"], minimum=1),

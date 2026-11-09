@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { adjustPlanBudget, approvePlan, getPlan, getProjects, ApiError, type Plan, type Project } from './api'
+import { adjustPlanBudget, approvePlan, getPlan, getPlanExplanations, getProjects, ApiError, type Plan, type Project } from './api'
 
 function money(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -54,6 +54,11 @@ export default function AllocationReview({ planId }: { planId: string }) {
     queryFn: () => getProjects(plan.data!.session_id),
     enabled: !!plan.data,
   })
+  const explanations = useQuery({
+    queryKey: ['explanations', planId],
+    queryFn: () => getPlanExplanations(planId),
+    enabled: !!plan.data,
+  })
   const adjust = useMutation({
     mutationFn: ({ cents, date }: { cents: number; date: string }) => adjustPlanBudget(planId, cents, date),
     onSuccess: (updated) => {
@@ -102,10 +107,11 @@ export default function AllocationReview({ planId }: { planId: string }) {
         <Summary label="Payable allocations" value={money(record.payable_total_cents)}/>
         <Summary label="Reserved" value={money(record.reserved_total_cents)}/>
         <Summary label="Upstream projects" value={record.lines.length.toLocaleString()}/>
-        <Summary label="PayPal payout fees" value={record.est_payout_fees_cents === null ? 'Unknown' : `Est. ${money(record.est_payout_fees_cents)}`}/>
+        <Summary label="Incoming fee" value={record.est_incoming_fee_cents === null ? 'Unknown' : `Est. ${money(record.est_incoming_fee_cents)}`}/>
+        <Summary label="Payout fees" value={record.est_payout_fees_cents === null ? 'Unknown' : `Est. ${money(record.est_payout_fees_cents)}`}/>
       </div>
       <p className="allocation-summary-note"><strong>{record.money_summary.charged_now_cents === null ? 'Not charged' : `${money(record.money_summary.charged_now_cents)} charged`}</strong>
-        {record.est_payout_fees_cents === null ? ' Fee inputs are not measured, so the fee estimate and funding charge are unavailable.' : ' Fee amount is an estimate from the current allocation policy.'}
+        {record.est_payout_fees_cents === null ? ' A supported US recipient and fee scope are required before the estimates and funding charge are available.' : ` Fee estimates use ${record.fee_policy_version}; actual fees come from PayPal responses.`}
         {isDraft && ' This plan remains a draft until you request approval.'}
       </p>
     </section>
@@ -121,6 +127,17 @@ export default function AllocationReview({ planId }: { planId: string }) {
           <tbody>{record.lines.map((line) => <AllocationRow key={line.upstream_key} line={line} project={projectByKey.get(line.upstream_key)}/>)}</tbody>
         </table>
       </div>}
+    </section>
+
+    <section className="source-section" aria-labelledby="why-funded-title">
+      <div className="source-section-heading"><div><span className="section-kicker">EVIDENCE REVIEW</span><h2 id="why-funded-title">Why this project is funded</h2></div><span className="row-count">One explanation per line</span></div>
+      {explanations.isPending && <div className="skeleton table-skeleton" aria-label="Preparing evidence explanations"/>}
+      {explanations.isError && <ErrorMessage error={explanations.error} retry={() => { void explanations.refetch() }}/>}
+      {explanations.data?.explanations.map((item) => <article className="explanation-card" key={item.upstream_key}>
+        <div className="explanation-head"><h3>{item.upstream_key}</h3><span className="method-label">{item.status === 'groq_ordered' ? 'Groq ranked evidence · server-authored claims' : item.status === 'disabled' ? 'Deterministic explanation' : 'Deterministic fallback'}</span></div>
+        <ul className="explanation-claims">{item.claims.map((claim) => <li key={claim.id}><p>{claim.text}</p><div className="claim-refs">Evidence: {claim.evidence_ids.map((id) => <code key={id}>{id}</code>)}</div></li>)}</ul>
+        <details className="signal-details"><summary>Inspect supporting evidence</summary><div className="evidence-source-list">{item.evidence.map((evidence) => <div className="evidence-source" key={evidence.id}><strong>{evidence.id}</strong><code>{JSON.stringify(evidence)}</code></div>)}</div></details>
+      </article>)}
     </section>
 
     {isDraft && <section className="continue-panel allocation-actions" aria-labelledby="adjust-budget-title">

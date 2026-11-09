@@ -1,0 +1,39 @@
+services:
+  dividend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      PORT: "8000"
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in the shell or ignored .env file}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      DATABASE_URL: sqlite:////data/dividend.db
+      DEMO_SEED_ON_BOOT: ${DEMO_SEED_ON_BOOT:-true}
+      PAYMENTS_MODE: ${PAYMENTS_MODE:-fake}
+      PAYPAL_ENV: sandbox
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
+      ENRICH_MODE: ${ENRICH_MODE:-fixtures}
+      UDD_DSN: ${UDD_DSN:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      LLM_PROVIDER: groq
+      LLM_LIVE_ENABLED: "false"
+      LLM_KILL_SWITCH: "true"
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-20b}
+      LLM_MAX_SOURCES_PER_SESSION: ${LLM_MAX_SOURCES_PER_SESSION:-5}
+      LLM_MAX_CALLS_PER_HOUR: ${LLM_MAX_CALLS_PER_HOUR:-100}
+    volumes:
+      - dividend-local-test-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  dividend-local-test-data:
+    name: dividend-local-test-data

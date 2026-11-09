@@ -22,6 +22,18 @@ fees:
   payout_fee_per_item_cents: null
   buffer_cents: null
   tolerance_cents: 5
+  version: unversioned-test-policy
+  merchant_market: US
+  payer_market_assumption: US
+  recipient_market: US
+  currency: USD
+  checkout_method: standard_paypal_checkout
+  payout_method: paypal_payouts_api
+  pricing_tier: standard
+  currency_conversion: false
+  micropayments: false
+  charity_pricing: false
+  negotiated_rates: false
 allocation:
   max_binaries_cap: 50
   per_project_cap_pct: 15
@@ -41,15 +53,16 @@ def write_policy(tmp_path, text=POLICY_YAML):
     return path
 
 
-def test_actual_policy_loads_documented_values_and_null_unknown_fees():
+def test_actual_policy_loads_the_explicit_standard_us_fee_scope():
     policy = load_allocation_policy(DEFAULT_POLICY_PATH)
 
-    assert policy.fees.measured is False
-    assert policy.fees.order_fee_pct is None
-    assert policy.fees.order_fee_fixed_cents is None
-    assert policy.fees.payout_fee_per_item_cents is None
-    assert policy.fees.buffer_cents is None
+    assert policy.fees.measured is True
+    assert policy.fees.order_fee_pct == Decimal("3.49")
+    assert policy.fees.order_fee_fixed_cents == 49
+    assert policy.fees.payout_fee_per_item_cents == 25
+    assert policy.fees.buffer_cents == 0
     assert policy.fees.tolerance_cents == 5
+    assert policy.fees.supports_standard_us_usd is True
     assert policy.allocation == AllocationRules(50, Decimal("15"), 100)
     assert policy.need_factors == NeedFactorPolicy(
         Decimal("0.5"), Decimal("0.8"), Decimal("1.5"),

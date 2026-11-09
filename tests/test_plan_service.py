@@ -68,7 +68,7 @@ def add_resolved_project(
     source_facts_value="present",
     normalized_last_commit="2025-01-02",
     method="repo_url",
-    validated=False,
+    validated=True,
 ):
     if source_facts_value == "present":
         persisted_source_facts = source_facts(source_name, partial=partial)
@@ -109,6 +109,7 @@ def add_resolved_project(
             display_name=f"Maintainer {key}",
             email="maintainer@example.test",
             opted_in=opted_in,
+            market_code="US" if opted_in else None,
         ))
     db.flush()
     return project
@@ -194,6 +195,16 @@ def test_only_resolved_project_records_are_eligible(db_factory):
     assert [project.upstream_key for project in result.projects] == ["owner/repo"]
 
 
+def test_persisted_unverified_project_is_excluded_from_funding(db_factory):
+    with db_factory() as db:
+        session = add_session(db, ["candidate"])
+        add_resolved_project(db, session.id, "owner/candidate", "candidate", validated=False)
+        db.commit()
+
+    with db_factory() as db, pytest.raises(AllocationError, match="no eligible"):
+        PlanService.assemble_allocation_inputs(db, session.id, date(2026, 11, 6))
+
+
 def test_no_eligible_projects_are_rejected_before_allocation(db_factory):
     with db_factory() as db:
         session = add_session(db, ["unmapped", "no-upstream"])
@@ -224,13 +235,13 @@ def test_missing_resolution_for_project_source_fails_closed(db_factory):
         PlanService.assemble_allocation_inputs(db, session.id, date(2026, 11, 6))
 
 
-def test_orphan_resolved_source_fails_instead_of_being_ignored(db_factory):
+def test_unverified_candidate_without_project_is_excluded(db_factory):
     with db_factory() as db:
         session = add_session(db, ["pkg"])
         add_unresolved(db, session.id, "pkg", method="repo_url", upstream_key="owner/repo")
         db.commit()
 
-    with db_factory() as db, pytest.raises(AllocationError, match="no matching upstream project"):
+    with db_factory() as db, pytest.raises(AllocationError, match="no eligible"):
         PlanService.assemble_allocation_inputs(db, session.id, date(2026, 11, 6))
 
 
@@ -319,8 +330,10 @@ def test_create_persists_plan_lines_snapshots_exact_weights_and_created_event(db
         plan = PlanService.create(db, session_id, 1000, date(2026, 11, 6))
         plan_id = plan.id
         assert plan.state == "draft"
-        assert plan.est_payout_fees_cents is None
-        assert plan.charge_cents is None
+        assert plan.est_payout_fees_cents == 25 * sum(line.payable_cents > 0 for line in plan.lines)
+        assert plan.charge_cents is not None
+        assert plan.fee_policy_version == "paypal-us-standard-v1"
+        assert plan.fee_policy_snapshot["target_distribution_cents"] == plan.payable_total_cents
         assert sum(line.amount_cents for line in plan.lines) == 1000
         assert all(line.payable_cents + line.reserved_cents == line.amount_cents for line in plan.lines)
         assert [line.upstream_key for line in plan.lines] == sorted(line.upstream_key for line in plan.lines)
@@ -346,8 +359,8 @@ def test_create_persists_plan_lines_snapshots_exact_weights_and_created_event(db
         actual = {line.upstream_key: line.weight for line in persisted.lines}
         assert actual == expected
         assert all(type(weight) is Decimal for weight in actual.values())
-        assert persisted.est_payout_fees_cents is None
-        assert persisted.charge_cents is None
+        assert persisted.est_payout_fees_cents is not None
+        assert persisted.charge_cents is not None
         assert all(facts_snapshot_from_dict(line.facts_snapshot).to_dict() == line.facts_snapshot for line in persisted.lines)
 
 
@@ -445,7 +458,7 @@ def test_repeated_create_requests_follow_existing_non_idempotent_contract(db_fac
         second = PlanService.create(db, session_id, 1000, date(2026, 11, 6))
         assert first.id != second.id
         assert db.scalar(select(func.count()).select_from(Plan)) == 2
-        assert db.scalar(select(func.count()).select_from(LedgerEvent)) == 2
+        assert db.scalar(select(func.count()).select_from(LedgerEvent)) == 4
 
 
 def test_create_does_not_commit_unrelated_caller_work(db_factory):
@@ -495,8 +508,8 @@ def test_adjust_budget_replaces_lines_and_persists_new_snapshot_allocation(db_fa
         )
         db.flush()
         assert plan.budget_cents == new_budget
-        assert plan.est_payout_fees_cents is None
-        assert plan.charge_cents is None
+        assert plan.est_payout_fees_cents == 25 * sum(line.payable_cents > 0 for line in plan.lines)
+        assert plan.charge_cents is not None
         assert all(line.id not in old_ids for line in plan.lines)
         assert len(plan.lines) == 7
         assert sum(line.amount_cents for line in plan.lines) == new_budget
@@ -696,14 +709,14 @@ def test_approve_freezes_draft_through_ledger_transition_and_is_idempotent(db_fa
         assert approved.frozen_at is not None
         assert approved.frozen_at.tzinfo is not None
         assert approved.order_attempt == 1
-        assert approved.charge_cents is None
+        assert approved.charge_cents is not None
         assert PlanService.approve(db, plan_id).state == "funding"
         events = list(db.scalars(select(LedgerEvent).where(
             LedgerEvent.plan_id == plan_id,
             LedgerEvent.type == "PLAN_APPROVED",
         )))
         assert len(events) == 1
-        assert events[0].payload == {"charge_cents": None, "order_attempt": 1}
+        assert events[0].payload == {"charge_cents": approved.charge_cents, "order_attempt": 1}
         db.commit()
 
     with db_factory() as db:

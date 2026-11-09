@@ -13,12 +13,6 @@ function statusClass(status: string) {
   return status === 'success' ? 'payout-success' : status === 'failed' || status === 'returned' ? 'payout-failed' : status === 'needs_attention' ? 'payout-attention' : status === 'pending' || status === 'unclaimed' ? 'payout-pending' : ''
 }
 
-function maskEmail(email: string) {
-  const at = email.lastIndexOf('@')
-  if (at < 1) return 'Recipient masked'
-  return `${email.slice(0, 1)}•••${email.slice(at)}`
-}
-
 function currentItems(batches: PayoutBatch[]) {
   const current = new Map<string, PayoutItem>()
   for (const batch of [...batches].sort((a, b) => a.attempt - b.attempt)) {
@@ -103,7 +97,7 @@ export default function Payouts({ planId }: { planId: string }) {
     {record.state === 'paying' && <section className={`payout-state-note${attention || !batches.length ? ' payout-state-attention' : ''}`} role="status"><strong>{!batches.length ? 'Payout outcome is uncertain.' : attention ? 'Provider outcome needs attention.' : 'Payouts are processing.'}</strong><span>{!batches.length ? 'Do not submit another batch. The API has no batch reference to reconcile yet; refresh status before taking further action.' : attention ? 'Do not submit another batch. Reconcile the existing batch to check provider status.' : 'The latest saved item statuses are shown below. Reconcile to request current provider results.'}</span></section>}
 
     {canReconcile && <section className="payout-reconcile-row"><p>{attention ? 'An uncertain or unrecognized result is held for provider reconciliation.' : 'Reconciliation checks the existing provider batch and updates item statuses.'}</p><button className="button button-secondary" type="button" disabled={actionsPending} onClick={() => reconcile.mutate()}>{reconcile.isPending ? 'Checking provider…' : 'Reconcile payout status'}</button></section>}
-    {canRetry && <section className="continue-panel payout-action-panel" aria-labelledby="retry-title"><div className="continue-copy"><span className="section-kicker">FAILED ITEMS ONLY</span><h2 id="retry-title">Retry {failedInLatest} failed payout{failedInLatest === 1 ? '' : 's'}</h2><p>Only items the backend marks failed are eligible. Pending, unclaimed, returned, and needs-attention items will not be retried.</p></div><div className="approval-actions"><button className="button button-secondary" type="button" disabled={actionsPending} onClick={() => { if (window.confirm(`Retry only the ${failedInLatest} payout items currently marked failed?`)) retry.mutate() }}>{retry.isPending ? 'Submitting eligible retries…' : 'Review and retry failed items'}</button></div></section>}
+    {canRetry && <section className="continue-panel payout-action-panel" aria-labelledby="retry-title"><div className="continue-copy"><span className="section-kicker">CONFIRMED FAILED ITEMS</span><h2 id="retry-title">Retry {failedInLatest} failed payout{failedInLatest === 1 ? '' : 's'}</h2><p>Only PayPal-confirmed failed items are eligible. Pending and unknown items remain reserved and cannot be retried.</p></div><div className="approval-actions"><button className="button button-secondary" type="button" disabled={actionsPending} onClick={() => { if (window.confirm(`Retry only the ${failedInLatest} payout items currently confirmed failed?`)) retry.mutate() }}>{retry.isPending ? 'Submitting eligible retries…' : 'Review and retry failed items'}</button></div></section>}
 
     {error && <RequestError error={error} refresh={() => { dispatch.reset(); retry.reset(); reconcile.reset(); void Promise.all([plan.refetch(), payouts.refetch()]) }}/ >}
 
@@ -113,7 +107,7 @@ export default function Payouts({ planId }: { planId: string }) {
       {!batches.length && <div className="empty-state"><h3>No payouts yet</h3><p>{record.state === 'funded' ? 'This funded plan is ready to distribute when you choose.' : `Current plan state is ${statusLabel(record.state)}. Payouts appear here after the backend records a batch.`}</p></div>}
       {batches.map((batch) => <Batch key={`${batch.attempt}-${batch.id}`} batch={batch} names={new Map(record.lines.map((line) => [line.upstream_key, line.display_name]))}/>)}
     </section>
-    <p className="payout-data-note">The payout API returns Dividend sender item IDs, but no provider item IDs or item-level error codes. Batch references are shown exactly as returned by the backend. Recipient email addresses are masked.</p>
+    <p className="payout-data-note">Recipient email addresses are not returned. Provider item error details appear when PayPal supplies them.</p>
   </section>
 }
 
@@ -131,9 +125,9 @@ function Batch({ batch, names }: { batch: PayoutBatch; names: Map<string, string
 
 function PayoutRow({ item, name }: { item: PayoutItem; name: string }) {
   return <tr><th scope="row" data-label="Upstream project"><strong>{name}</strong><code>{item.upstream_key}</code></th>
-    <td data-label="Recipient">{maskEmail(item.recipient_email)}</td><td data-label="Amount"><strong className="allocation-amount">{money(item.amount_cents)}</strong></td>
+    <td data-label="Recipient">{item.recipient_display}</td><td data-label="Amount"><strong className="allocation-amount">{money(item.amount_cents)}</strong></td>
     <td data-label="Item reference"><code className="payout-item-id">{item.sender_item_id}</code></td>
-    <td data-label="Status"><span className={`status-pill ${statusClass(item.status)}`}><span/>{statusLabel(item.status)}</span>{item.status === 'failed' && <small className="payout-error-note">Provider item error details are not included in this response.</small>}</td>
+    <td data-label="Status"><span className={`status-pill ${statusClass(item.status)}`}><span/>{statusLabel(item.status)}</span>{item.failure_reason && <small className="payout-error-note">{item.failure_reason}</small>}</td>
     <td data-label="Updated">{new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.updated_at))}</td></tr>
 }
 

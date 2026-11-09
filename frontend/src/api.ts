@@ -1,5 +1,6 @@
 export type Session = {
   id: string
+  mode: string
   status: 'created' | 'resolving' | 'ready' | 'failed' | string
   stage: string | null
   progress_done: number
@@ -9,18 +10,32 @@ export type Session = {
   error_message: string | null
 }
 
+export type RuntimeConfig = {
+  paypal_env: string
+  sandbox: boolean
+  payments_mode: 'paypal' | 'fake'
+  fee_params: { order_fee_pct: number | null; order_fee_fixed_cents: number | null; payout_fee_per_item_cents: number | null; buffer_cents: number | null; tolerance_cents: number }
+}
+
+export function getConfig() { return request<RuntimeConfig>('/config') }
+
 export type SourceDetail = {
   source_name: string
   binary_names: string[] | null
   upstream_key: string | null
   method: string
   outcome: string
+  validated: boolean
+  evidence: { field: string; value: string }[] | null
+  repository_url: string | null
 }
 
 export type Project = {
   upstream_key: string
   display_name: string
   repository_url: string | null
+  validated: boolean
+  evidence: { field: string; value: string }[]
   binary_count: number
   source_names: string[]
   payability: string
@@ -50,6 +65,8 @@ export type Plan = {
   payable_total_cents: number
   reserved_total_cents: number
   est_payout_fees_cents: number | null
+  est_incoming_fee_cents: number | null
+  fee_policy_version: string | null
   charge_cents: number | null
   order_id: string | null
   order_attempt: number
@@ -77,6 +94,19 @@ export type Plan = {
       }[]
     } | null
   }[]
+}
+
+export type ProjectExplanation = {
+  upstream_key: string
+  status: string
+  claims: { id: string; text: string; evidence_ids: string[] }[]
+  evidence: { id: string; [key: string]: unknown }[]
+}
+
+export function getPlanExplanations(id: string) {
+  return request<{ plan_id: string; explanations: ProjectExplanation[] }>(
+    `/api/plans/${encodeURIComponent(id)}/explanations`, { headers: planHeaders(id) },
+  )
 }
 
 export class ApiError extends Error {
@@ -119,6 +149,14 @@ export function createDemoSession() {
   })
 }
 
+export function createUploadSession(payload: unknown) {
+  return request<Session>('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'upload', payload }),
+  })
+}
+
 export function getSession(id: string) {
   return request<Session>(`/api/sessions/${encodeURIComponent(id)}`)
 }
@@ -128,28 +166,33 @@ export function getProjects(id: string) {
 }
 
 export function createPlan(sessionId: string, budgetCents: number, evaluationDate: string) {
-  return request<{ id: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/plans`, {
+  return request<{ id: string; action_token: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/plans`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ budget_cents: budgetCents, evaluation_date: evaluationDate }),
   })
 }
 
+function planHeaders(id: string): HeadersInit {
+  const token = sessionStorage.getItem(`plan:${id}`)
+  return token ? { 'X-Plan-Token': token } : {}
+}
+
 export function getPlan(id: string) {
-  return request<Plan>(`/api/plans/${encodeURIComponent(id)}`)
+  return request<Plan>(`/api/plans/${encodeURIComponent(id)}`, { headers: planHeaders(id) })
 }
 
 export function adjustPlanBudget(id: string, budgetCents: number, evaluationDate: string) {
   return request<Plan>(`/api/plans/${encodeURIComponent(id)}/budget`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...planHeaders(id) },
     body: JSON.stringify({ budget_cents: budgetCents, evaluation_date: evaluationDate }),
   })
 }
 
 export function approvePlan(id: string) {
   return request<{ order_id: string; approval_url: string }>(`/api/plans/${encodeURIComponent(id)}/approve`, {
-    method: 'POST',
+    method: 'POST', headers: planHeaders(id),
   })
 }
 
@@ -159,15 +202,16 @@ export type Capture = {
 }
 
 export function capturePlan(id: string) {
-  return request<Capture>(`/api/plans/${encodeURIComponent(id)}/capture`, { method: 'POST' })
+  return request<Capture>(`/api/plans/${encodeURIComponent(id)}/capture`, { method: 'POST', headers: planHeaders(id) })
 }
 
 export type PayoutItem = {
   sender_item_id: string
   upstream_key: string
-  recipient_email: string
+  recipient_display: string
   amount_cents: number
   status: string
+  failure_reason: string | null
   updated_at: string
 }
 
@@ -183,17 +227,17 @@ export type Payouts = { batches: PayoutBatch[] }
 export type PayoutAction = { batch_id: string; item_count: number; state: string }
 
 export function getPayouts(id: string) {
-  return request<Payouts>(`/api/plans/${encodeURIComponent(id)}/payouts`)
+  return request<Payouts>(`/api/plans/${encodeURIComponent(id)}/payouts`, { headers: planHeaders(id) })
 }
 
 export function dispatchPayouts(id: string) {
-  return request<PayoutAction>(`/api/plans/${encodeURIComponent(id)}/payout`, { method: 'POST' })
+  return request<PayoutAction>(`/api/plans/${encodeURIComponent(id)}/payout`, { method: 'POST', headers: planHeaders(id) })
 }
 
 export function retryFailedPayouts(id: string) {
-  return request<PayoutAction>(`/api/plans/${encodeURIComponent(id)}/payout/retry`, { method: 'POST' })
+  return request<PayoutAction>(`/api/plans/${encodeURIComponent(id)}/payout/retry`, { method: 'POST', headers: planHeaders(id) })
 }
 
 export function reconcilePayouts(id: string) {
-  return request<Payouts>(`/api/plans/${encodeURIComponent(id)}/reconcile`, { method: 'POST' })
+  return request<Payouts>(`/api/plans/${encodeURIComponent(id)}/reconcile`, { method: 'POST', headers: planHeaders(id) })
 }

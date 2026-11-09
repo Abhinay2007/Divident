@@ -1,0 +1,23 @@
+{
+  "label": "reviewed test evidence only; not fetched or live-verified",
+  "cases": [
+    {
+      "source_name": "bash",
+      "repository_url": "https://git.savannah.gnu.org/cgit/bash.git",
+      "project_source_url": "https://www.gnu.org/software/bash/",
+      "linked_repository_url": "https://git.savannah.gnu.org/cgit/bash.git"
+    },
+    {
+      "source_name": "curl",
+      "repository_url": "https://github.com/curl/curl",
+      "project_source_url": "https://curl.se/dev/source.html",
+      "linked_repository_url": "https://github.com/curl/curl"
+    },
+    {
+      "source_name": "systemd",
+      "repository_url": "https://github.com/systemd/systemd",
+      "project_source_url": "https://systemd.io/BACKPORTS/",
+      "linked_repository_url": "https://github.com/systemd/systemd"
+    }
+  ]
+}

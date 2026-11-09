@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Discovery from './Discovery'
 import AllocationReview from './AllocationReview'
 import FundScreen from './FundScreen'
 import PayoutsScreen from './Payouts'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { ApiError, createUploadSession, getConfig } from './api'
 
 const navItems = [
   { label: 'Overview', icon: 'grid', href: '/' },
@@ -29,6 +31,18 @@ function Icon({ name }: { name: string }) {
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false)
+  const uploadInput = useRef<HTMLInputElement>(null)
+  const config = useQuery({ queryKey: ['config'], queryFn: getConfig })
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      if (file.size > 1_000_000) throw new Error('Scan files must be 1 MB or smaller.')
+      let payload: unknown
+      try { payload = JSON.parse(await file.text()) }
+      catch { throw new Error('Choose a valid scan.json file.') }
+      return createUploadSession(payload)
+    },
+    onSuccess: ({ id }) => window.location.assign(`/discovery/${id}`),
+  })
   const route = window.location.pathname.match(/^\/discovery(?:\/([^/]+))?\/?$/)
   const allocationRoute = window.location.pathname.match(/^\/allocation\/([^/]+)\/?$/)
   const fundRoute = window.location.pathname.match(/^\/fund\/([^/]+)\/?$/)
@@ -70,7 +84,7 @@ export default function App() {
       <div className="main-column">
         <header className="topbar">
           <div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><strong>{currentPage}</strong></div>
-          <div className="topbar-right"><span className="sandbox-pill"><span/>Sandbox environment</span><button className="help-button" type="button" aria-label="About the sandbox">?</button></div>
+          <div className="topbar-right"><span className="sandbox-pill"><span/>{config.data ? `${config.data.paypal_env === 'sandbox' ? 'Sandbox' : config.data.paypal_env} · ${config.data.payments_mode === 'fake' ? 'Fake provider' : 'PayPal'}` : config.isError ? 'Environment unavailable' : 'Loading environment…'}</span>{config.isError && <span role="alert">Configuration unavailable{config.error instanceof ApiError && config.error.requestId ? ` · Request ID ${config.error.requestId}` : ''} <button className="text-button" type="button" onClick={() => { void config.refetch() }}>Retry</button></span>}<button className="help-button" type="button" aria-label="About the sandbox">?</button></div>
         </header>
         <main id="main" className={`main-content${isDiscovery ? ' main-content-discovery' : ''}`}>
           {isDiscovery ? <Discovery sessionId={sessionId}/> : allocationId ? <AllocationReview planId={allocationId}/> : fundId ? <FundScreen planId={fundId}/> : payoutsId ? <PayoutsScreen planId={payoutsId}/> : <>
@@ -91,7 +105,8 @@ export default function App() {
             <div className="panel-topline"><span>GET STARTED</span><span className="panel-code">DV · 001</span></div>
             <div className="panel-content">
               <div className="panel-copy"><div className="scan-symbol"><span/><span/><span/></div><h2 id="start-title">Start with your software.</h2><p>Explore a curated Debian package set, or bring a package list from a system you manage.</p>
-                <div className="panel-actions"><a className="button button-primary" href="/discovery"><Icon name="scan"/>Open package discovery</a><button className="button button-secondary" type="button" disabled title="Package upload will be available in a later milestone">Import package list <span className="coming-soon">SOON</span></button></div>
+                <div className="panel-actions"><a className="button button-primary" href="/discovery"><Icon name="scan"/>Open package discovery</a><input ref={uploadInput} hidden type="file" accept=".json,application/json" aria-label="Choose Debian scan JSON" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) upload.mutate(file) }}/><button className="button button-secondary" type="button" disabled={upload.isPending} onClick={() => uploadInput.current?.click()}>{upload.isPending ? 'Importing package list…' : 'Import package list'}</button></div>
+                {upload.isError && <div role="alert" className="discovery-error"><span>{upload.error.message}</span>{upload.error instanceof ApiError && upload.error.requestId && <code>Request ID {upload.error.requestId}</code>}<button className="text-button" type="button" onClick={() => uploadInput.current?.click()}>Choose another file</button></div>}
               </div>
               <div className="panel-aside"><div className="aside-label">HOW IT WORKS</div><ol className="mini-steps"><li><span>1</span><div><strong>Map dependencies</strong><small>Connect packages to upstream projects.</small></div></li><li><span>2</span><div><strong>Review the plan</strong><small>Understand every proposed allocation.</small></div></li><li><span>3</span><div><strong>Choose to fund</strong><small>Approve sandbox payments yourself.</small></div></li></ol><p className="assurance"><span className="assurance-mark">✓</span> Nothing is charged without your approval.</p></div>
             </div>

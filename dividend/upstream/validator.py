@@ -6,7 +6,14 @@ from ..enrichment.base import FactSet
 from .normalizer import normalize
 
 EVIDENCE_ALLOWLIST = {"udd.repository", "udd.homepage", "udd.contact", "github.full_name", "github.owner_login", "github.parent_full_name"}
-_URL_FIELDS = {"udd.repository", "udd.homepage"}
+_IDENTITY_URL_FIELDS = {"udd.repository"}
+
+
+def _github_repository_key(full_name: str) -> str | None:
+    parts = full_name.split("/")
+    if len(parts) != 2 or not all(parts):
+        return None
+    return normalize(f"https://github.com/{full_name}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +44,7 @@ def validate(proposal: Proposal, facts: FactSet, existing_keys: set[str] | None 
         return False
     available = fact_values(facts)
     cited_urls: set[str] = set()
+    cited_parent_keys: set[str] = set()
     cited_fields: set[str] = set()
     for item in proposal.evidence:
         if type(item) is not dict or set(item) != {"field", "value"}:
@@ -45,10 +53,21 @@ def validate(proposal: Proposal, facts: FactSet, existing_keys: set[str] | None 
         if type(field) is not str or field not in EVIDENCE_ALLOWLIST or type(value) is not str or not value.strip() or available.get(field) != value or field in cited_fields:
             return False
         cited_fields.add(field)
-        if field in _URL_FIELDS:
+        if field in _IDENTITY_URL_FIELDS:
             key = normalize(value)
             if key:
                 cited_urls.add(key)
+        elif field == "github.full_name":
+            key = _github_repository_key(value)
+            if key:
+                cited_urls.add(key)
+        elif field == "github.parent_full_name":
+            key = _github_repository_key(value)
+            if key:
+                cited_parent_keys.add(key)
     if len(cited_urls) > 1:
         return False
-    return proposal.upstream_key in cited_urls or proposal.upstream_key in (existing_keys or set())
+    return proposal.upstream_key in cited_urls or (
+        proposal.upstream_key in (existing_keys or set())
+        and proposal.upstream_key in cited_parent_keys
+    )

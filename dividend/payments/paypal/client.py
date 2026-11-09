@@ -71,6 +71,14 @@ def _captures(order: Any) -> list[CaptureResult]:
     return found
 
 
+def _payer_country_code(order: Any) -> str | None:
+    payer = order.payer
+    if payer is UNSET or payer is None or payer.address is UNSET or payer.address is None:
+        return None
+    country = payer.address.country_code
+    return country if isinstance(country, str) else None
+
+
 def _provider_code(error: object) -> str:
     if isinstance(error, Error):
         details = error.details
@@ -219,7 +227,7 @@ class PayPalProvider:
     def get_order(self, order_id: str) -> OrderDetail:
         try:
             order = self._orders.orders.get_order(order_id)
-            return OrderDetail(order_id, _captures(order))
+            return OrderDetail(order_id, _captures(order), _payer_country_code(order))
         except Exception as exc:
             raise _sdk_failure(exc, write=False) from exc
 
@@ -284,7 +292,17 @@ class PayPalProvider:
                 raise PaymentProviderError("PayPal payout item response is invalid", code="invalid_payout_response")
             if external_id is not None and not isinstance(external_id, str):
                 raise PaymentProviderError("PayPal payout item ID is invalid", code="invalid_payout_response")
-            items.append(ItemDetail(sender_item_id, external_id, raw_status, cents))
+            errors = entry.get("errors")
+            reason = None
+            if isinstance(errors, dict):
+                parts = [errors.get("message")]
+                details = errors.get("details")
+                if isinstance(details, list):
+                    parts.extend(detail.get("description") or detail.get("issue")
+                                 for detail in details if isinstance(detail, dict))
+                reason = "; ".join(part.strip() for part in parts
+                                    if isinstance(part, str) and part.strip())[:512] or None
+            items.append(ItemDetail(sender_item_id, external_id, raw_status, cents, reason))
         return BatchDetail(actual_id, status, _payout_fee(header.get("fees")), items)
 
     def _request(self, method: str, path: str, access_token: str, *, request_id: str | None = None,

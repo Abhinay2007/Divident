@@ -33,26 +33,23 @@ def test_valid_fake_settings_without_optional_credentials(tmp_path):
     assert settings.GITHUB_TOKEN is None
 
 
-def test_paypal_requires_credentials_and_measured_policy(tmp_path):
+def test_paypal_requires_credentials_but_not_measured_policy(tmp_path):
     settings = Settings(**base(
         tmp_path,
         PAYMENTS_MODE="paypal",
         PAYPAL_CLIENT_ID="sandbox-id",
         PAYPAL_CLIENT_SECRET="sandbox-secret",
-        allocation_policy_path=policy_file(tmp_path, True),
+        allocation_policy_path=policy_file(tmp_path, False),
     ))
     assert settings.PAYMENTS_MODE == "paypal"
 
 
-def test_paypal_rejected_for_unmeasured_policy(tmp_path):
-    with pytest.raises(ValidationError, match="measured allocation policy"):
-        Settings(**base(
-            tmp_path,
-            PAYMENTS_MODE="paypal",
-            PAYPAL_CLIENT_ID="id",
-            PAYPAL_CLIENT_SECRET="secret",
-            allocation_policy_path=policy_file(tmp_path, False),
-        ))
+@pytest.mark.parametrize("missing", ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"])
+def test_paypal_still_requires_credentials(tmp_path, missing):
+    credentials = {"PAYPAL_CLIENT_ID": "id", "PAYPAL_CLIENT_SECRET": "secret"}
+    credentials.pop(missing)
+    with pytest.raises(ValidationError, match=missing):
+        Settings(**base(tmp_path, PAYMENTS_MODE="paypal", **credentials))
 
 
 def test_fake_mode_works_with_actual_unmeasured_policy():
@@ -66,7 +63,8 @@ def test_fake_mode_works_with_actual_unmeasured_policy():
 
 def test_non_sandbox_and_invalid_payment_mode_rejected(tmp_path):
     with pytest.raises(ValidationError):
-        Settings(**base(tmp_path, PAYPAL_ENV="production"))
+        Settings(**base(tmp_path, PAYMENTS_MODE="paypal", PAYPAL_ENV="production",
+                        PAYPAL_CLIENT_ID="id", PAYPAL_CLIENT_SECRET="secret"))
     with pytest.raises(ValidationError):
         Settings(**base(tmp_path, PAYMENTS_MODE="other"))
 

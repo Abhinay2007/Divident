@@ -30,10 +30,15 @@ class UDDClient:
             import psycopg
             connect = psycopg.connect
         with connect(self.dsn) as connection, connection.cursor() as cursor:
+            cursor.execute("SET LOCAL client_encoding TO 'UTF8'")
             cursor.execute(_QUERY, (source_names,))
             rows = cursor.fetchall()
         result = {name: FactSet(name, partial=True) for name in source_names}
         for source, homepage, repository, contact in rows:
+            source, homepage, repository, contact = (
+                value.decode("utf-8") if isinstance(value, bytes) else value
+                for value in (source, homepage, repository, contact)
+            )
             result[source] = FactSet(source, repository_url=repository, homepage=homepage,
                                      contact=contact, partial=not bool(repository or homepage or contact))
         return result

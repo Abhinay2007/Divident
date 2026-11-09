@@ -1,6 +1,7 @@
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -131,6 +132,16 @@ def test_capture_and_get_order_preserve_observed_breakdown_and_unknown_fees():
         adapter.close()
 
 
+def test_payer_country_code_is_read_from_order_response():
+    from dividend.payments.paypal.client import _payer_country_code
+
+    order_response = SimpleNamespace(
+        payer=SimpleNamespace(address=SimpleNamespace(country_code="US"))
+    )
+    assert _payer_country_code(order_response) == "US"
+    assert _payer_country_code(SimpleNamespace(payer=None)) is None
+
+
 def test_capture_rejects_non_usd_or_unparseable_money():
     invalid = {"id": "CAPTURE-1", "status": "COMPLETED",
                "seller_receivable_breakdown": {
@@ -160,7 +171,9 @@ def test_payout_request_uses_stable_identifiers_and_raw_provider_status():
                              "fees": {"value": "0.50", "currency": "USD"}},
             "items": [{"payout_item": {"sender_item_id": "item-1",
                                          "amount": {"value": "3.00", "currency": "USD"}},
-                       "payout_item_id": "ITEM-1", "transaction_status": "SUCCESS"}],
+                       "payout_item_id": "ITEM-1", "transaction_status": "FAILED",
+                       "errors": {"message": "Recipient could not be paid",
+                                  "details": [{"issue": "RECIPIENT_RESTRICTED"}]} }],
         })
 
     adapter, _, requests = provider([], payout_handler)
@@ -173,8 +186,10 @@ def test_payout_request_uses_stable_identifiers_and_raw_provider_status():
         assert requests[-1].headers["paypal-request-id"] == "plan:plan-1:payout:1"
         detail = adapter.get_payout_batch("BATCH-1")
         assert (detail.batch_id, detail.status, detail.fees_cents) == ("BATCH-1", "SUCCESS", 50)
-        assert [(item.sender_item_id, item.external_id, item.raw_status, item.amount_cents)
-                for item in detail.items] == [("item-1", "ITEM-1", "SUCCESS", 300)]
+        assert [(item.sender_item_id, item.external_id, item.raw_status, item.amount_cents,
+                 item.failure_reason)
+                for item in detail.items] == [("item-1", "ITEM-1", "FAILED", 300,
+                                                "Recipient could not be paid; RECIPIENT_RESTRICTED")]
     finally:
         adapter.close()
 
