@@ -2,7 +2,6 @@
 .env
 .env.*
 !.env.example
-/data/demo_sandbox_recipients.yaml
 /.local/
 
 # Python virtual environments, bytecode, and caches

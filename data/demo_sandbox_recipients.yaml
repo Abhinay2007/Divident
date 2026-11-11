@@ -1,0 +1,5 @@
+schema: 2
+recipients:
+  github.com/curl/curl:
+    email: "sb-475qg653637733@personal.example.com"
+    market_code: US
