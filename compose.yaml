@@ -10,7 +10,7 @@ services:
       PORT: "8000"
       ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in the shell or ignored .env file}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
-      DATABASE_URL: sqlite:////data/dividend.db
+      DATABASE_URL: sqlite:////var/data/dividend.db
       DEMO_SEED_ON_BOOT: ${DEMO_SEED_ON_BOOT:-true}
       PAYMENTS_MODE: paypal
       PAYPAL_ENV: sandbox
@@ -28,7 +28,7 @@ services:
       MODAL_PROXY_TOKEN_ID: ${MODAL_PROXY_TOKEN_ID:-}
       MODAL_PROXY_TOKEN_SECRET: ${MODAL_PROXY_TOKEN_SECRET:-}
     volumes:
-      - dividend-local-test-data:/data
+      - dividend-local-test-data:/var/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 30s

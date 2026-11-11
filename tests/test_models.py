@@ -14,7 +14,7 @@ from dividend.db import Base, create_database_engine, create_session_factory, in
 EXPECTED_TABLES = {
     "sessions", "source_resolutions", "upstream_projects", "maintainers", "maintainer_recipients", "plans",
     "plan_lines", "payout_batches", "payout_items", "payment_operations",
-    "ledger_events", "llm_cache", "maintainer_claims",
+    "ledger_events", "llm_cache", "maintainer_claims", "synthetic_sandbox_recipients",
 }
 
 
@@ -33,24 +33,25 @@ def _names(table):
 
 def test_import_registers_expected_tables():
     assert set(Base.metadata.tables) == EXPECTED_TABLES
-    assert len(Base.metadata.tables) == 13
+    assert len(Base.metadata.tables) == 14
 
 
 def test_columns_types_and_money_are_lld_defined():
     expected = {
-        "sessions": {"id", "mode", "status", "source_names", "source_binaries", "binary_count", "source_count", "stage", "progress_done", "progress_total", "error_message", "created_at", "expires_at"},
+        "sessions": {"id", "mode", "synthetic_demo", "synthetic_fixture_version", "synthetic_policy_version", "synthetic_run_key", "status", "source_names", "source_binaries", "binary_count", "source_count", "stage", "progress_done", "progress_total", "error_message", "created_at", "expires_at"},
         "source_resolutions": {"id", "session_id", "source_name", "upstream_key", "method", "outcome", "evidence", "validated", "cached", "created_at"},
         "upstream_projects": {"id", "session_id", "upstream_key", "display_name", "repository_url", "binary_count", "source_names", "source_facts", "need_signals", "created_at"},
         "maintainers": {"id", "upstream_key", "display_name", "email", "opted_in", "market_code", "share_bps", "active", "created_at"},
         "maintainer_recipients": {"id", "upstream_key", "display_name", "email", "opted_in", "market_code", "share_bps", "active", "created_at"},
         "maintainer_claims": {"id", "recipient_id", "upstream_key", "status", "github_user_id", "github_login", "invitation_token_hash", "invitation_expires_at", "session_token_hash", "session_expires_at", "oauth_state_hash", "oauth_code_verifier", "oauth_state_expires_at", "created_at", "verified_at"},
-        "plans": {"id", "session_id", "state", "budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "est_incoming_fee_cents", "charge_cents", "fee_policy_version", "fee_policy_snapshot", "order_id", "approval_url", "order_attempt", "capture_attempt", "payout_attempt", "capture_gross_cents", "capture_fee_cents", "capture_net_cents", "failure_reason", "frozen_at", "created_at"},
+        "plans": {"id", "session_id", "state", "synthetic_demo", "synthetic_fixture_version", "synthetic_policy_version", "budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "est_incoming_fee_cents", "charge_cents", "fee_policy_version", "fee_policy_snapshot", "order_id", "approval_url", "order_attempt", "capture_attempt", "payout_attempt", "capture_gross_cents", "capture_fee_cents", "capture_net_cents", "failure_reason", "frozen_at", "created_at"},
         "plan_lines": {"id", "plan_id", "upstream_key", "display_name", "weight", "amount_cents", "payable_cents", "reserved_cents", "reason", "facts_snapshot", "maintainer_splits"},
         "payout_batches": {"id", "plan_id", "attempt", "sender_batch_id", "external_id", "status", "fees_cents", "estimated_fees_cents", "created_at"},
         "payout_items": {"id", "batch_id", "plan_id", "upstream_key", "maintainer_id", "sender_item_id", "recipient_email", "amount_cents", "status", "external_id", "failure_reason", "updated_at"},
-        "payment_operations": {"id", "plan_id", "kind", "attempt", "state", "request_id", "external_id", "payout_batch_id", "provider_result", "prior_plan_state", "error_code", "created_at", "updated_at", "resolved_at"},
+        "payment_operations": {"id", "plan_id", "kind", "attempt", "state", "synthetic_demo", "request_id", "external_id", "payout_batch_id", "provider_result", "prior_plan_state", "error_code", "created_at", "updated_at", "resolved_at"},
         "ledger_events": {"id", "plan_id", "session_id", "type", "external_id", "payload", "created_at"},
         "llm_cache": {"key", "response", "created_at"},
+        "synthetic_sandbox_recipients": {"id", "upstream_key", "display_name", "email", "market_code", "config_sha256", "created_at"},
     }
     assert {name: _names(table) for name, table in Base.metadata.tables.items()} == expected
     money_columns = ["budget_cents", "payable_total_cents", "reserved_total_cents", "est_payout_fees_cents", "charge_cents", "capture_gross_cents", "capture_fee_cents", "capture_net_cents"]

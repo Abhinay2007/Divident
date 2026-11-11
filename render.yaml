@@ -9,23 +9,27 @@ services:
     healthCheckPath: /health
     disk:
       name: dividend-data
-      mountPath: /data
+      mountPath: /var/data
       sizeGB: 1
     envVars:
       - key: ADMIN_TOKEN
         generateValue: true
       - key: PUBLIC_BASE_URL
         sync: false
+      - key: PAYMENTS_MODE
+        value: paypal
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
       - key: GITHUB_OAUTH_CLIENT_ID
         sync: false
       - key: GITHUB_OAUTH_CLIENT_SECRET
         sync: false
       - key: DATABASE_URL
-        value: sqlite:////data/dividend.db
-      - key: PAYMENTS_MODE
-        value: fake
-      - key: PAYPAL_ENV
-        value: sandbox
+        value: sqlite:////var/data/dividend.db
       - key: ENRICH_MODE
         value: fixtures
       - key: DEMO_SEED_ON_BOOT

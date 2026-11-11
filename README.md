@@ -33,3 +33,13 @@ chmod +x run_dividend.bash
 The launcher creates/reuses `.venv`, installs the project from `pyproject.toml` and frontend dependencies from the lockfile, and scans installed packages on the host. Scan reports are saved under `.local/scans/` and are ignored by Git. Upload the printed report through Dividend's existing package upload flow; the launcher does not import it or approve/capture payments. Open the frontend at http://127.0.0.1:5173; the backend is at http://127.0.0.1:8000. Press Ctrl+C to stop both services.
 
 Troubleshooting: missing system tools are reported with Debian/Ubuntu install commands. The launcher requires Python 3.11+ and a Vite-compatible Node.js version. If port 8000 or 5173 is occupied, stop the service using it and rerun; the launcher does not kill unrelated processes. If startup configuration fails, review `.env` locally without sharing its secrets.
+
+## Deploy on Render
+
+`render.yaml` defines one Docker Web Service on the paid Starter plan, with one instance and a persistent disk mounted at `/var/data`. SQLite is stored at `/var/data/dividend.db`; keep the service at one instance. The app serves the Vite build and API from the same origin.
+
+Create the service from the repository in Render using the Blueprint flow and `render.yaml`. Supply `PUBLIC_BASE_URL` and the PayPal Sandbox REST app values for `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET`. Do not use live PayPal credentials. The manifest generates `ADMIN_TOKEN`. GitHub maintainer claims are optional; configure both `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` together if needed.
+
+Modal AI Evidence Review is off by default. To enable it, configure both `MODAL_PROXY_TOKEN_ID` and `MODAL_PROXY_TOKEN_SECRET`, then set `LLM_LIVE_ENABLED=true` and `LLM_KILL_SWITCH=false` in the Render environment. The endpoint and model are preconfigured with `MODAL_ENDPOINT_URL` and `MODAL_MODEL`. The kill switch must remain enabled unless live AI review is intentionally enabled for the demo.
+
+Render checks `/health`. The persistent disk makes deploys briefly unavailable and is accessible to only one service instance; keep regular database backups. Render disk data is unavailable during image builds and pre-deploy commands.

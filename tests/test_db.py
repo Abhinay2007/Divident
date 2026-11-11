@@ -1,7 +1,7 @@
 import pytest
 from decimal import Decimal
 from sqlalchemy import ForeignKey, inspect, text
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from dividend.db import Base, create_database_engine, create_session_factory, initialize_database, seed_if_empty
@@ -13,6 +13,21 @@ def test_engine_and_session_lifecycle(tmp_path):
     with factory() as session:
         assert session.execute(text("SELECT 1")).scalar_one() == 1
     engine.dispose()
+
+
+def test_sqlite_creates_configured_parent_and_persists_data(tmp_path):
+    database_path = tmp_path / "mounted" / "nested" / "dividend.db"
+    url = f"sqlite:///{database_path}"
+    engine = create_database_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE persistence_check (value TEXT NOT NULL)"))
+        connection.execute(text("INSERT INTO persistence_check VALUES ('kept')"))
+    engine.dispose()
+
+    reopened = create_database_engine(url)
+    with reopened.connect() as connection:
+        assert connection.scalar(text("SELECT value FROM persistence_check")) == "kept"
+    reopened.dispose()
 
 
 def test_initialization_creates_registered_metadata(tmp_path):
@@ -119,16 +134,10 @@ def test_seed_if_empty_skips_populated_database(tmp_path):
 
 
 def test_initialization_errors_are_not_suppressed(tmp_path):
-    engine = create_database_engine(f"sqlite:///{tmp_path / 'missing' / 'db.sqlite'}")
-    try:
-        try:
-            initialize_database(engine)
-        except OperationalError:
-            pass
-        else:
-            raise AssertionError("initialization unexpectedly succeeded")
-    finally:
-        engine.dispose()
+    parent = tmp_path / "not-a-directory"
+    parent.write_text("block SQLite directory creation")
+    with pytest.raises(FileExistsError):
+        create_database_engine(f"sqlite:///{parent / 'db.sqlite'}")
 
 
 def test_initialize_database_upgrades_existing_upstream_projects_idempotently(tmp_path):

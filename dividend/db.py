@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, Index, create_engine, event, inspect, select, text
+from sqlalchemy import Engine, Index, create_engine, event, inspect, make_url, select, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -30,6 +30,11 @@ def create_database_engine(database_url: str, **engine_options: Any) -> Engine:
     """Create an engine and configure SQLite connections for application use."""
     is_sqlite = database_url.startswith("sqlite:")
     if is_sqlite:
+        database_path = make_url(database_url).database
+        if database_path and database_path != ":memory:" and not database_path.startswith("file:"):
+            from pathlib import Path
+
+            Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         engine_options.setdefault("connect_args", {"check_same_thread": False})
     engine = create_engine(database_url, **engine_options)
 

@@ -23,16 +23,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LLM_LIVE_ENABLED=false \
     LLM_KILL_SWITCH=true \
     DEMO_SEED_ON_BOOT=true \
+    DATABASE_URL=sqlite:////var/data/dividend.db \
     PORT=8000
 WORKDIR /app
 RUN groupadd --system dividend && useradd --system --gid dividend --home-dir /app dividend \
-    && mkdir -p /data && chown dividend:dividend /data
+    && mkdir -p /var/data && chown dividend:dividend /var/data
 COPY --from=python-dependencies /install/ /usr/local/
 COPY --chown=dividend:dividend dividend/ ./dividend/
 COPY --chown=dividend:dividend data/ ./data/
 COPY --from=frontend-build --chown=dividend:dividend /build/frontend/dist ./frontend/dist
-USER dividend
+COPY scripts/render-entrypoint.sh /usr/local/bin/render-entrypoint
+RUN chmod 755 /usr/local/bin/render-entrypoint
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"PORT\", \"8000\")}/health', timeout=3)" || exit 1
-CMD ["sh", "-c", "uvicorn dividend.main:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}"]
+ENTRYPOINT ["/usr/local/bin/render-entrypoint"]
