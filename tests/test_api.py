@@ -148,6 +148,18 @@ def test_plan_routes_require_capability_and_rejected_calls_have_no_payment_side_
                     response = await getattr(client, method)(path)
                     assert response.status_code == 401, (path, response.text)
                     assert response.json()["request_id"]
+                    assert response.json()["code"] == "plan_auth_required"
+                paypal_return = f"/api/plans/{plan_id}?paypal=return&token=PAYPAL_ORDER_ID&PayerID=buyer"
+                missing = await client.get(paypal_return)
+                assert missing.status_code == 401
+                assert missing.json()["code"] == "plan_auth_required"
+                invalid = await client.get(paypal_return, headers={"X-Plan-Token": "PAYPAL_ORDER_ID"})
+                assert invalid.status_code == 401
+                assert invalid.json()["code"] == "plan_auth_required"
+                authorized_return = await client.get(paypal_return, headers={
+                    "X-Plan-Token": plan_access_token("test-token", plan_id),
+                })
+                assert authorized_return.status_code == 200
                 visible = await client.get(f"/api/plans/{plan_id}/payouts", headers={
                     "X-Plan-Token": plan_access_token("test-token", plan_id),
                 })
@@ -156,11 +168,54 @@ def test_plan_routes_require_capability_and_rejected_calls_have_no_payment_side_
                 assert "recipient_email" not in visible.text
                 assert visible.json()["batches"][0]["items"][0]["recipient_display"] == "Public Maintainer"
                 assert not app.state.provider.orders
+                assert not app.state.provider.captures
                 assert not app.state.provider.batches
 
     asyncio.run(exercise())
     with factory() as db:
         assert db.get(Plan, plan_id).state == "settled"
+    engine.dispose()
+
+
+def test_workspace_lists_persisted_sessions_and_plans_without_bypassing_plan_auth(tmp_path):
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'workspace.db'}")
+    factory = create_session_factory(engine)
+    app = create_app(settings(tmp_path), engine=engine, session_factory=factory)
+    initialize_database(engine)
+    with factory.begin() as db:
+        session = SessionRecord(mode="demo", status="ready", source_names=["curl"],
+                                source_count=1, binary_count=1)
+        db.add(session)
+        db.flush()
+        plan = Plan(session_id=session.id, state="funding", budget_cents=1000,
+                    payable_total_cents=900, reserved_total_cents=100,
+                    order_id="paypal-order", order_attempt=1, charge_cents=1000)
+        db.add(plan)
+        db.flush()
+        session_id, plan_id = session.id, plan.id
+
+    async def exercise():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.get("/api/workspace")
+                assert response.status_code == 200
+                saved = response.json()["sessions"]
+                assert len(saved) == 1
+                assert saved[0]["id"] == session_id
+                assert saved[0]["plans"][0]["id"] == plan_id
+                assert saved[0]["plans"][0]["last_updated_at"]
+                assert "state" not in saved[0]["plans"][0]
+
+                blocked = await client.get(f"/api/plans/{plan_id}")
+                assert blocked.status_code == 401
+                assert blocked.json()["code"] == "plan_auth_required"
+                resumed = await client.get(f"/api/plans/{plan_id}", headers={
+                    "X-Plan-Token": plan_access_token("test-token", plan_id),
+                })
+                assert resumed.status_code == 200
+                assert resumed.json()["order_id"] == "paypal-order"
+
+    asyncio.run(exercise())
     engine.dispose()
 
 
@@ -180,7 +235,7 @@ def test_llm_kill_switch_overrides_injected_provider(tmp_path):
     engine.dispose()
 
 
-def test_api_approval_returns_charge_error_without_hanging(tmp_path):
+def test_api_approval_rejects_missing_proposal_without_hanging(tmp_path):
     engine = create_database_engine(f"sqlite:///{tmp_path / 'approval.db'}")
     factory = create_session_factory(engine)
     app = create_app(settings(tmp_path), engine=engine, session_factory=factory)
@@ -209,7 +264,7 @@ def test_api_approval_returns_charge_error_without_hanging(tmp_path):
             ) as client:
                 response = await client.post(f"/api/plans/{plan_id}/approve", headers={"X-Plan-Token": plan_access_token("test-token", plan_id)})
                 assert response.status_code == 422
-                assert response.json()["code"] == "charge_unavailable"
+                assert response.json()["code"] == "approval_snapshot_invalid"
 
     asyncio.run(exercise())
     with factory() as db:

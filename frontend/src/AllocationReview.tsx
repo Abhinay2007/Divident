@@ -161,7 +161,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
       </div>
       <div className="approval-actions">
         {isDraft && <button className="button button-primary" type="button" disabled={approve.isPending || adjust.isPending || approvalUnavailable} title={approvalUnavailable ? 'Approval requires measured payment fee inputs.' : undefined} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking approval…' : adjust.isPending ? 'Updating plan…' : approvalUnavailable ? 'Approval unavailable · fees unmeasured' : 'Request PayPal approval'}{!approvalUnavailable && <span aria-hidden="true">→</span>}</button>}
-        {approvalResult && <a className="button button-secondary" href={approvalResult.approval_url} target="_blank" rel="noreferrer">Open PayPal approval<span aria-hidden="true">↗</span></a>}
+        {approvalResult && <a className="button button-secondary" href={approvalResult.approval_url}>Open PayPal approval<span aria-hidden="true">↗</span></a>}
         {approve.isError && <ErrorMessage error={approve.error} retry={approve.error instanceof ApiError && !['order_outcome_unknown', 'charge_unavailable'].includes(approve.error.code ?? '') ? () => approve.mutate() : undefined}/>}
         {approve.isSuccess && <p className="form-success" role="status">PayPal order {approve.data.order_id} is ready for buyer authorization. No funds have been captured.</p>}
         <a className="text-link" href={`/fund/${record.id}`}>View funding status <span aria-hidden="true">→</span></a>
@@ -185,8 +185,8 @@ function AllocationRow({ line, project }: { line: Plan['lines'][number]; project
     <th scope="row" data-label="Project & maintainer">
       <div className="allocation-project"><strong>{line.display_name}</strong><code>{line.upstream_key}</code>
         {safeRepo ? <a href={safeRepo} target="_blank" rel="noreferrer">{safeRepo}<span className="sr-only"> (opens in a new tab)</span></a> : <span className="cell-muted">Repository not supplied</span>}
-        <span className="maintainer-line">{project?.maintainer_name ?? 'Maintainer record unavailable'}</span>
-        <span className={`eligibility-pill ${eligible ? 'eligible' : 'reserved'}`}>{eligible ? 'Opted in · payable' : project?.maintainer_name ? 'Not opted in · reserved' : 'No opted-in maintainer · reserved'}</span>
+        {line.maintainers.length > 0 ? <ul className="maintainer-lines">{line.maintainers.map((maintainer) => <li key={maintainer.maintainer_id}><span>{maintainer.display_name} · {(maintainer.share_bps / 100).toFixed(2)}%</span><strong>{money(maintainer.amount_cents)}</strong></li>)}</ul> : <span className="maintainer-line">{project?.maintainer_name ?? 'No eligible maintainer'}</span>}
+        <span className={`eligibility-pill ${eligible ? 'eligible' : 'reserved'}`}>{eligible ? 'Opted in · payable' : 'No opted-in US maintainer · reserved'}</span>
       </div>
     </th>
     <td data-label="Allocation"><strong className="allocation-amount">{money(line.amount_cents)}</strong></td>

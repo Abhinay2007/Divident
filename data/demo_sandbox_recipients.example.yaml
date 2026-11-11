@@ -1,11 +1,2 @@
-schema: 1
-recipients:
-  salsa.debian.org/apt-team/apt: ''
-  git.savannah.gnu.org/git/bash: ''
-  git.dpkg.org/cgit/dpkg/dpkg: ''
-  sourceware.org/git/glibc: ''
-  github.com/systemd/systemd: ''
-  github.com/curl/curl: ''
-  github.com/sqlite/sqlite: ''
-  gitlab.freedesktop.org/xorg/lib/xcb-util: ''
-  gitlab.freedesktop.org/xorg/lib/xcb-util-keysyms: ''
+schema: 2
+recipients: {}

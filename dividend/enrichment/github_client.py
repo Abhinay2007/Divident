@@ -9,10 +9,10 @@ from .base import FactSet, GitHubFacts
 
 class GitHubClient:
     def __init__(self, token: str, client: httpx.Client | None = None):
-        self.client = client or httpx.Client(timeout=10, headers={
-            "Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        self.client = client or httpx.Client(timeout=10, headers=headers)
 
     def enrich(self, fact: FactSet) -> FactSet:
         url = fact.repository_url

@@ -1,10 +1,55 @@
 """In-process caps for the hosted demo's bounded live resolver."""
 
 from collections import deque
+from datetime import UTC, datetime, time
+import hashlib
 from threading import Lock
 from time import monotonic
 
 from ..errors import RateLimitExceeded
+from ..models import LLMCache
+
+
+class GroqRequestBudget:
+    """Persistent rolling request/token budgets stored in the existing LLM cache."""
+
+    KEY = hashlib.sha256(b"groq-application-request-budget-v1").hexdigest()
+    # shortcut: counter writes serialize per process; use a database lease before multi-worker deployments.
+    _lock = Lock()
+
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
+
+    def reserve(self, input_tokens: int) -> None:
+        if input_tokens > 3000:
+            raise RateLimitExceeded("Groq input token limit reached",
+                                    code="llm_input_budget_exceeded")
+        current = datetime.now(UTC)
+        now = current.timestamp()
+        day_start = datetime.combine(current.date(), time.min, UTC).timestamp()
+        with self._lock, self.session_factory() as db:
+            row = db.get(LLMCache, self.KEY)
+            state = row.response if row is not None else {"requests": [], "tokens": []}
+            requests = [stamp for stamp in state.get("requests", []) if stamp >= day_start]
+            tokens = [event for event in state.get("tokens", []) if event[0] >= day_start]
+            per_minute_requests = sum(stamp >= now - 60 for stamp in requests)
+            per_minute_tokens = sum(amount for stamp, amount in tokens if stamp >= now - 60)
+            per_day_tokens = sum(amount for _, amount in tokens)
+            request_tokens = input_tokens + 700
+            if per_minute_requests >= 2 or len(requests) >= 20:
+                raise RateLimitExceeded("Groq request budget exhausted",
+                                        code="llm_request_budget_exhausted")
+            if per_minute_tokens + request_tokens > 8000 or per_day_tokens + request_tokens > 200_000:
+                raise RateLimitExceeded("Groq token budget exhausted",
+                                        code="llm_token_budget_exhausted")
+            requests.append(now)
+            tokens.append([now, request_tokens])
+            value = {"requests": requests, "tokens": tokens}
+            if row is None:
+                db.add(LLMCache(key=self.KEY, response=value))
+            else:
+                row.response = value
+            db.commit()
 
 
 class LiveResolutionLimits:

@@ -302,7 +302,8 @@ class PayPalProvider:
                                  for detail in details if isinstance(detail, dict))
                 reason = "; ".join(part.strip() for part in parts
                                     if isinstance(part, str) and part.strip())[:512] or None
-            items.append(ItemDetail(sender_item_id, external_id, raw_status, cents, reason))
+            items.append(ItemDetail(sender_item_id, external_id, raw_status, cents, reason,
+                                    amount.get("currency")))
         return BatchDetail(actual_id, status, _payout_fee(header.get("fees")), items)
 
     def _request(self, method: str, path: str, access_token: str, *, request_id: str | None = None,

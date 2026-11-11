@@ -4,14 +4,16 @@ import Discovery from './Discovery'
 import AllocationReview from './AllocationReview'
 import FundScreen from './FundScreen'
 import PayoutsScreen from './Payouts'
+import WorkspaceActivity from './WorkspaceActivity'
+import MaintainerClaim from './MaintainerClaim'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ApiError, createUploadSession, getConfig } from './api'
 
 const navItems = [
   { label: 'Overview', icon: 'grid', href: '/' },
   { label: 'Discovery', icon: 'scan', href: '/discovery' },
-  { label: 'Allocations', icon: 'layers' },
-  { label: 'Payouts', icon: 'arrows' },
+  { label: 'Allocations', icon: 'layers', href: '/#workspace-title' },
+  { label: 'Payouts', icon: 'arrows', href: '/#workspace-title' },
 ]
 
 function Icon({ name }: { name: string }) {
@@ -47,6 +49,7 @@ export default function App() {
   const allocationRoute = window.location.pathname.match(/^\/allocation\/([^/]+)\/?$/)
   const fundRoute = window.location.pathname.match(/^\/fund\/([^/]+)\/?$/)
   const payoutsRoute = window.location.pathname.match(/^\/payouts\/([^/]+)\/?$/)
+  const maintainerClaimRoute = window.location.pathname === '/claim' || window.location.pathname === '/claim/'
   const isDiscovery = !!route
   const isAllocation = !!allocationRoute
   const sessionId = route?.[1]
@@ -56,7 +59,7 @@ export default function App() {
   const planId = allocationId || fundId || payoutsId
   const isFund = !!fundId
   const isPayouts = !!payoutsId
-  const currentPage = isDiscovery ? 'Discovery' : isAllocation ? 'Allocations' : isFund ? 'Funding' : isPayouts ? 'Payouts' : 'Overview'
+  const currentPage = maintainerClaimRoute ? 'Maintainer claim' : isDiscovery ? 'Discovery' : isAllocation ? 'Allocations' : isFund ? 'Funding' : isPayouts ? 'Payouts' : 'Overview'
 
   return (
     <div className="app-shell">
@@ -69,7 +72,7 @@ export default function App() {
         <button className="mobile-menu" type="button" aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={menuOpen} aria-controls="primary-navigation" onClick={() => setMenuOpen(!menuOpen)}><Icon name={menuOpen ? 'close' : 'menu'}/></button>
         <nav className={`primary-nav${menuOpen ? ' menu-open' : ''}`} id="primary-navigation">
           {navItems.map(({ label, icon, href }) => (href || (label === 'Allocations' && planId) || (label === 'Payouts' && planId)) ? (
-            <a key={label} className={`nav-link${currentPage === label || (isFund && label === 'Allocations') ? ' active' : ''}`} href={href || (label === 'Payouts' ? `/payouts/${planId}` : `/allocation/${planId}`)} aria-current={currentPage === label || (isFund && label === 'Allocations') ? 'page' : undefined} onClick={() => setMenuOpen(false)}><Icon name={icon}/><span>{label}</span></a>
+            <a key={label} className={`nav-link${currentPage === label || (isFund && label === 'Allocations') ? ' active' : ''}`} href={label === 'Allocations' && planId ? `/allocation/${planId}` : label === 'Payouts' && planId ? `/payouts/${planId}` : href} aria-current={currentPage === label || (isFund && label === 'Allocations') ? 'page' : undefined} onClick={() => setMenuOpen(false)}><Icon name={icon}/><span>{label}</span></a>
           ) : (
             <span key={label} className="nav-link nav-soon" aria-disabled="true"><Icon name={icon}/><span>{label}</span><span className="soon-dot" title="Available in a later workflow step"/></span>
           ))}
@@ -87,7 +90,7 @@ export default function App() {
           <div className="topbar-right"><span className="sandbox-pill"><span/>{config.data ? `${config.data.paypal_env === 'sandbox' ? 'Sandbox' : config.data.paypal_env} · ${config.data.payments_mode === 'fake' ? 'Fake provider' : 'PayPal'}` : config.isError ? 'Environment unavailable' : 'Loading environment…'}</span>{config.isError && <span role="alert">Configuration unavailable{config.error instanceof ApiError && config.error.requestId ? ` · Request ID ${config.error.requestId}` : ''} <button className="text-button" type="button" onClick={() => { void config.refetch() }}>Retry</button></span>}<button className="help-button" type="button" aria-label="About the sandbox">?</button></div>
         </header>
         <main id="main" className={`main-content${isDiscovery ? ' main-content-discovery' : ''}`}>
-          {isDiscovery ? <Discovery sessionId={sessionId}/> : allocationId ? <AllocationReview planId={allocationId}/> : fundId ? <FundScreen planId={fundId}/> : payoutsId ? <PayoutsScreen planId={payoutsId}/> : <>
+          {maintainerClaimRoute ? <MaintainerClaim/> : isDiscovery ? <Discovery sessionId={sessionId}/> : allocationId ? <AllocationReview planId={allocationId}/> : fundId ? <FundScreen planId={fundId}/> : payoutsId ? <PayoutsScreen planId={payoutsId}/> : <>
           <div className="page-heading">
             <div><div className="eyebrow">OPEN-SOURCE FUNDING</div><h1>Good software deserves<br className="desktop-break"/> a sustainable future.</h1><p className="intro">See what your system depends on. Decide what to fund. Keep every dollar explainable.</p></div>
             <span className="date-stamp">DEBIAN · UBUNTU</span>
@@ -105,7 +108,7 @@ export default function App() {
             <div className="panel-topline"><span>GET STARTED</span><span className="panel-code">DV · 001</span></div>
             <div className="panel-content">
               <div className="panel-copy"><div className="scan-symbol"><span/><span/><span/></div><h2 id="start-title">Start with your software.</h2><p>Explore a curated Debian package set, or bring a package list from a system you manage.</p>
-                <div className="panel-actions"><a className="button button-primary" href="/discovery"><Icon name="scan"/>Open package discovery</a><input ref={uploadInput} hidden type="file" accept=".json,application/json" aria-label="Choose Debian scan JSON" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) upload.mutate(file) }}/><button className="button button-secondary" type="button" disabled={upload.isPending} onClick={() => uploadInput.current?.click()}>{upload.isPending ? 'Importing package list…' : 'Import package list'}</button></div>
+                <div className="panel-actions"><a className="button button-primary" href="/discovery"><Icon name="scan"/>Start new discovery</a><input ref={uploadInput} hidden type="file" accept=".json,application/json" aria-label="Choose Debian scan JSON" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) upload.mutate(file) }}/><button className="button button-secondary" type="button" disabled={upload.isPending} onClick={() => uploadInput.current?.click()}>{upload.isPending ? 'Importing package list…' : 'Import package list'}</button></div>
                 {upload.isError && <div role="alert" className="discovery-error"><span>{upload.error.message}</span>{upload.error instanceof ApiError && upload.error.requestId && <code>Request ID {upload.error.requestId}</code>}<button className="text-button" type="button" onClick={() => uploadInput.current?.click()}>Choose another file</button></div>}
               </div>
               <div className="panel-aside"><div className="aside-label">HOW IT WORKS</div><ol className="mini-steps"><li><span>1</span><div><strong>Map dependencies</strong><small>Connect packages to upstream projects.</small></div></li><li><span>2</span><div><strong>Review the plan</strong><small>Understand every proposed allocation.</small></div></li><li><span>3</span><div><strong>Choose to fund</strong><small>Approve sandbox payments yourself.</small></div></li></ol><p className="assurance"><span className="assurance-mark">✓</span> Nothing is charged without your approval.</p></div>
@@ -113,7 +116,7 @@ export default function App() {
           </section>
 
           <div className="below-grid">
-            <section className="quiet-card" aria-labelledby="activity-title"><div className="card-heading"><h2 id="activity-title">Recent activity</h2><span className="muted-label">THIS WORKSPACE</span></div><div className="empty-activity"><span className="empty-indicator"/><p>Your discovery sessions will appear here.</p></div></section>
+            <WorkspaceActivity/>
             <section className="quiet-card note-card" aria-labelledby="trust-title"><div className="card-heading"><h2 id="trust-title">Built for clarity</h2><span className="note-icon">↗</span></div><p>Allocations are deterministic and reviewable. Payments use PayPal sandbox until you explicitly approve a plan.</p><a href="https://www.paypal.com/us/webapps/mpp/ua/useragreement-full" target="_blank" rel="noreferrer">How sandbox payments work <Icon name="external"/></a></section>
           </div>
           <footer className="page-footer"><span>Dividend <span className="brand-period">·</span> Funding the software we depend on.</span><span>Payments remain in sandbox</span></footer>

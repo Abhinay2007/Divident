@@ -1,6 +1,7 @@
 """Request IDs and the LLD's one-megabyte request limit."""
 
 import json
+from urllib.parse import parse_qs
 from uuid import UUID, uuid4
 
 
@@ -16,6 +17,14 @@ class RequestContextMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        if scope.get("path") == "/api/maintainer-claims/oauth/callback":
+            callback = parse_qs(scope.get("query_string", b"").decode("ascii", "ignore"))
+            scope["github_oauth_callback"] = {
+                key: callback.get(key, [None])[0] for key in ("state", "code", "error")
+            }
+            # Uvicorn access logs include the raw query string; OAuth codes and
+            # state values must never appear there.
+            scope["query_string"] = b""
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         raw_request_id = headers.get(b"x-request-id", b"").decode("latin-1")
         try:

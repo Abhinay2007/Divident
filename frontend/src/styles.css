@@ -115,6 +115,23 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
 .muted-label { color: #9aa198; font-size: 8px; }
 .empty-activity { display: flex; align-items: center; gap: 9px; margin-top: 25px; color: #858d85; }
 .empty-activity p { margin: 0; font-size: 11px; }
+.workspace-sessions { display: grid; gap: 12px; margin-top: 16px; }
+.workspace-session { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.workspace-session-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.workspace-session-head h3 { margin: 4px 0; color: #313b32; font-size: 12px; }
+.workspace-session-head p { margin: 0; color: #858d85; font-size: 10px; }
+.workspace-plans { display: grid; gap: 7px; }
+.workspace-plan { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; border: 1px solid var(--line); background: #fbfcf9; }
+.workspace-plan-main { display: grid; justify-items: start; gap: 5px; min-width: 0; }
+.workspace-plan-main > strong { color: #39443a; font-size: 11px; }
+.workspace-plan-main small { color: #778077; font-size: 9px; }
+.workspace-discovery-list { margin-top: 22px; }
+.workspace-links { display: grid; gap: 8px; margin-top: 14px; }
+.workspace-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); color: inherit; text-decoration: none; }
+.workspace-link:hover { border-color: #aabbaa; background: #fbfcf9; }
+.workspace-link > span:first-child { display: grid; gap: 5px; }
+.workspace-link strong { font-size: 11px; }
+.workspace-link small { color: #778077; font-size: 9px; }
 .empty-indicator { width: 7px; height: 7px; border: 1px solid #aab5a7; border-radius: 50%; }
 .note-icon { color: var(--green); font-size: 15px; }
 .note-card > p { margin: 13px 0 10px; color: #737c73; font-size: 10px; line-height: 1.6; }
@@ -122,6 +139,15 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
 .note-card > a:hover { color: var(--green-dark); text-decoration: underline; }
 .note-card > a svg { width: 12px; height: 12px; }
 .page-footer { display: flex; justify-content: space-between; gap: 14px; margin-top: 35px; padding-top: 13px; border-top: 1px solid var(--line); color: #929991; font-size: 9px; }
+.claim-page { width: min(100%, 620px); margin: 40px auto; padding: clamp(24px, 5vw, 46px); border: 1px solid var(--line-strong); background: var(--surface); }
+.claim-page h1 { margin: 15px 0 10px; font-size: clamp(27px, 4vw, 38px); }
+.claim-page > p { color: var(--ink-muted); font-size: 13px; line-height: 1.7; }
+.claim-result { padding: 12px 14px; border: 1px solid #ead2b7; background: #fff9f0; color: #76511d !important; }
+.claim-success { border-color: #c7dcc8; background: #f1f8f1; color: #2d6840 !important; }
+.claim-status { display: grid; gap: 7px; margin-top: 22px; padding: 17px; border: 1px solid #c7dcc8; background: #f5faf4; }
+.claim-status strong { color: #2d6840; font-size: 14px; }
+.claim-status span, .claim-status small, .claim-privacy { color: var(--ink-muted); font-size: 11px; }
+.claim-privacy { margin-top: 16px; }
 
 @media (min-width: 1500px) { .main-content { padding-top: 55px; } }
 @media (max-width: 1050px) {
@@ -351,6 +377,9 @@ h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.35px; }
 .allocation-project > a { color: var(--green); font-family: var(--mono); font-size: 10px; font-weight: 400; overflow-wrap: anywhere; text-decoration: none; }
 .allocation-project > a:hover { text-decoration: underline; }
 .maintainer-line { margin-top: 5px; color: #4d584d; font-size: 11px; font-weight: 500; overflow-wrap: anywhere; }
+.maintainer-lines { display: grid; gap: 4px; margin: 5px 0 0; padding: 0; list-style: none; }
+.maintainer-lines li { display: flex; justify-content: space-between; gap: 8px; color: #4d584d; font-size: 10px; }
+.maintainer-lines strong { color: #2f3c30; white-space: nowrap; }
 .eligibility-pill { width: fit-content; padding: 4px 6px; border: 1px solid var(--line); background: var(--surface-soft); color: #686f68; font-size: 9px; font-weight: 600; line-height: 1.4; }
 .eligibility-pill.eligible { border-color: #cbdccb; background: #f1f6f0; color: #2d6641; }
 .eligibility-pill.reserved { border-color: #e8dfcb; background: #faf7ef; color: #846729; }

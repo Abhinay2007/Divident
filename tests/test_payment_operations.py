@@ -212,6 +212,82 @@ def test_backfill_is_additive_idempotent_and_preserves_legacy_rows(tmp_path):
     engine.dispose()
 
 
+def test_legacy_fee_policy_columns_are_added_before_payment_operation_backfill(tmp_path):
+    engine, factory = _database(tmp_path, "legacy-fee-policy.db")
+    with factory.begin() as db:
+        plan = _plan(db, state="paying", order_attempt=1, payout_attempt=1,
+                     order_id="legacy-order")
+        plan.est_payout_fees_cents = 25
+        plan.charge_cents = 125
+        plan_id = plan.id
+        batch = PayoutBatch(
+            plan_id=plan_id, attempt=1, sender_batch_id="legacy-sender-batch",
+            external_id="legacy-provider-batch", status="success", fees_cents=25,
+        )
+        db.add(batch)
+        db.flush()
+        batch_id = batch.id
+        db.add(PayoutItem(
+            batch_id=batch_id, plan_id=plan_id, upstream_key="owner/project",
+            sender_item_id="legacy-item", recipient_email="payee@example.test",
+            amount_cents=100, status="success", external_id="legacy-item-result",
+        ))
+        db.add(LedgerEvent(
+            plan_id=plan_id, type="ORDER_CREATED", external_id="legacy-order",
+            payload={"order_id": "legacy-order"},
+        ))
+        db.add(LedgerEvent(
+            plan_id=plan_id, type="PAYOUT_BATCH_CREATED", external_id="legacy-provider-batch",
+            payload={"batch_id": "legacy-provider-batch"},
+        ))
+
+    # Reproduce the pre-fee-policy schema while retaining real payment history.
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE payment_operations")
+        for column in ("est_incoming_fee_cents", "fee_policy_version", "fee_policy_snapshot"):
+            connection.exec_driver_sql(f"ALTER TABLE plans DROP COLUMN {column}")
+        connection.exec_driver_sql("ALTER TABLE payout_batches DROP COLUMN estimated_fees_cents")
+        connection.exec_driver_sql("ALTER TABLE maintainers DROP COLUMN market_code")
+
+    initialize_database(engine)
+    initialize_database(engine)
+
+    plan_columns = {column["name"] for column in inspect(engine).get_columns("plans")}
+    assert {"est_incoming_fee_cents", "fee_policy_version", "fee_policy_snapshot"} <= plan_columns
+    assert "estimated_fees_cents" in {
+        column["name"] for column in inspect(engine).get_columns("payout_batches")
+    }
+    assert "market_code" in {
+        column["name"] for column in inspect(engine).get_columns("maintainers")
+    }
+    with factory() as db:
+        plan = db.get(Plan, plan_id)
+        assert (plan.state, plan.order_id, plan.order_attempt, plan.payout_attempt) == (
+            "paying", "legacy-order", 1, 1,
+        )
+        assert (plan.est_payout_fees_cents, plan.charge_cents) == (25, 125)
+        assert plan.est_incoming_fee_cents is None
+        assert db.get(PayoutBatch, batch_id).external_id == "legacy-provider-batch"
+        item = db.scalar(select(PayoutItem).where(PayoutItem.sender_item_id == "legacy-item"))
+        assert (item.status, item.recipient_email, item.external_id) == (
+            "success", "payee@example.test", "legacy-item-result",
+        )
+        assert db.scalar(select(LedgerEvent.id).where(
+            LedgerEvent.external_id == "legacy-order",
+        ))
+        operations = list(db.scalars(select(PaymentOperation).where(
+            PaymentOperation.plan_id == plan_id,
+        )))
+        assert {(op.kind, op.attempt, op.external_id) for op in operations} == {
+            ("order", 1, "legacy-order"),
+            ("payout", 1, "legacy-provider-batch"),
+        }
+        assert len(operations) == 2
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
+
+
 @pytest.mark.parametrize("case", [
     "draft_with_attempt", "funding_without_attempt", "conflicting_order_ids",
     "conflicting_capture_ids", "payout_counter_gap",

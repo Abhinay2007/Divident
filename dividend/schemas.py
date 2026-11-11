@@ -69,6 +69,27 @@ class SessionResponse(Contract):
     error_message: str | None
 
 
+class WorkspacePlanRef(Contract):
+    id: str
+    created_at: datetime
+    last_updated_at: datetime
+
+
+class WorkspaceSession(Contract):
+    id: str
+    mode: str
+    status: str
+    source_count: int
+    binary_count: int | None
+    created_at: datetime
+    last_updated_at: datetime
+    plans: list[WorkspacePlanRef]
+
+
+class WorkspaceResponse(Contract):
+    sessions: list[WorkspaceSession]
+
+
 class ProjectResponse(Contract):
     upstream_key: str
     display_name: str
@@ -120,6 +141,14 @@ class PlanLineResponse(Contract):
     payability: str
     reason: str
     facts_snapshot: dict[str, Any] | None
+    maintainers: list["MaintainerAllocationResponse"] = Field(default_factory=list)
+
+
+class MaintainerAllocationResponse(Contract):
+    maintainer_id: str
+    display_name: str
+    share_bps: int = Field(strict=True)
+    amount_cents: int = Field(strict=True)
 
 
 class MoneySummary(Contract):
@@ -153,6 +182,25 @@ class PlanResponse(Contract):
     action_token: str | None = None
 
 
+class EvidenceReviewContributor(Contract):
+    contributor_id: str
+    observation: str
+    cited_pr_numbers: list[int] = Field(default_factory=list, strict=True)
+
+
+class EvidenceReviewResponse(Contract):
+    status: Literal["available", "unavailable", "invalid"]
+    reason: str | None = None
+    summary: str | None = None
+    contributors: list[EvidenceReviewContributor] = Field(default_factory=list)
+    cited_pr_numbers: list[int] = Field(default_factory=list, strict=True)
+    advisory_flags: list[str] = Field(default_factory=list)
+    proposal_sha256: str | None = None
+    model: str | None = None
+    prompt_version: str | None = None
+    retry_after_seconds: float | None = None
+
+
 class ApproveResponse(Contract):
     order_id: str
     approval_url: str
@@ -181,6 +229,7 @@ class PayoutResponse(Contract):
 class ItemResponse(Contract):
     sender_item_id: str
     upstream_key: str
+    maintainer_id: str | None = None
     recipient_display: str = "Verified recipient"
     amount_cents: int = Field(strict=True)
     status: str
@@ -219,6 +268,23 @@ class HealthResponse(Contract):
     db: str
     provider_mode: str
     fixtures_loaded: bool
+
+
+class ClaimInvitationRequest(Contract):
+    token: str = Field(min_length=32, max_length=128)
+
+
+class ClaimStatusResponse(Contract):
+    status: Literal["invited", "pending", "verified"]
+    github_login: str | None
+    github_user_id: int | None = Field(strict=True)
+    created_at: datetime
+    verified_at: datetime | None
+
+
+class ClaimInvitationResponse(Contract):
+    claim_url: str
+    expires_in_seconds: int
 
 
 class FeeParams(Contract):

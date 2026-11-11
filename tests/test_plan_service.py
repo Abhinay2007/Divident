@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from sqlalchemy import func, select
@@ -9,10 +10,11 @@ from dividend.allocation import facts_snapshot_from_dict
 from dividend.db import create_database_engine, create_session_factory, initialize_database
 from dividend.errors import NotFoundError, StateError, ValidationError
 from dividend.models import (
-    LedgerEvent, Maintainer, Plan, PlanLine, Session as SessionRecord,
+    LedgerEvent, Maintainer, MaintainerClaim, MaintainerRecipient, Plan, PlanLine, Session as SessionRecord,
     SourceResolution, UpstreamProject,
 )
 from dividend.services import AllocationInputSet, PlanService
+from dividend.services.plan_service import MaintainerShare, split_cents_by_share
 
 
 @pytest.fixture
@@ -331,7 +333,7 @@ def test_create_persists_plan_lines_snapshots_exact_weights_and_created_event(db
         plan_id = plan.id
         assert plan.state == "draft"
         assert plan.est_payout_fees_cents == 25 * sum(line.payable_cents > 0 for line in plan.lines)
-        assert plan.charge_cents is not None
+        assert plan.charge_cents is None
         assert plan.fee_policy_version == "paypal-us-standard-v1"
         assert plan.fee_policy_snapshot["target_distribution_cents"] == plan.payable_total_cents
         assert sum(line.amount_cents for line in plan.lines) == 1000
@@ -360,7 +362,7 @@ def test_create_persists_plan_lines_snapshots_exact_weights_and_created_event(db
         assert actual == expected
         assert all(type(weight) is Decimal for weight in actual.values())
         assert persisted.est_payout_fees_cents is not None
-        assert persisted.charge_cents is not None
+        assert persisted.charge_cents is None
         assert all(facts_snapshot_from_dict(line.facts_snapshot).to_dict() == line.facts_snapshot for line in persisted.lines)
 
 
@@ -509,7 +511,7 @@ def test_adjust_budget_replaces_lines_and_persists_new_snapshot_allocation(db_fa
         db.flush()
         assert plan.budget_cents == new_budget
         assert plan.est_payout_fees_cents == 25 * sum(line.payable_cents > 0 for line in plan.lines)
-        assert plan.charge_cents is not None
+        assert plan.charge_cents is None
         assert all(line.id not in old_ids for line in plan.lines)
         assert len(plan.lines) == 7
         assert sum(line.amount_cents for line in plan.lines) == new_budget
@@ -709,22 +711,48 @@ def test_approve_freezes_draft_through_ledger_transition_and_is_idempotent(db_fa
         assert approved.frozen_at is not None
         assert approved.frozen_at.tzinfo is not None
         assert approved.order_attempt == 1
-        assert approved.charge_cents is not None
+        assert approved.charge_cents is None
         assert PlanService.approve(db, plan_id).state == "funding"
         events = list(db.scalars(select(LedgerEvent).where(
             LedgerEvent.plan_id == plan_id,
             LedgerEvent.type == "PLAN_APPROVED",
         )))
         assert len(events) == 1
-        assert events[0].payload == {"charge_cents": approved.charge_cents, "order_attempt": 1}
-        db.commit()
-
-    with db_factory() as db:
-        plan = db.get(Plan, plan_id)
-        old_ids = {line.id for line in plan.lines}
+        assert events[0].payload == {
+            "charge_cents": approved.charge_cents, "order_attempt": 1,
+            "approval_snapshot_sha256": approved.fee_policy_snapshot["approval_proposal"]["sha256"],
+        }
+        original_hash = approved.fee_policy_snapshot["approval_proposal"]["sha256"]
         with pytest.raises(StateError):
             PlanService.adjust_budget(db, plan_id, 1100, date(2026, 11, 6))
-        assert {line.id for line in plan.lines} == old_ids
+        assert approved.fee_policy_snapshot["approval_proposal"]["sha256"] == original_hash
+
+
+@pytest.mark.parametrize("tamper", ["snapshot", "hash"])
+def test_approval_rejects_proposal_integrity_failure_without_freezing(db_factory, tamper):
+    with db_factory.begin() as db:
+        session = add_allocation_session(db)
+        plan = PlanService.create(db, session.id, 1000, date(2026, 11, 6))
+        plan_id = plan.id
+        changed = dict(plan.fee_policy_snapshot)
+        frozen = dict(changed["approval_proposal"])
+        proposal = dict(frozen["snapshot"])
+        if tamper == "snapshot":
+            projects = list(proposal["projects"])
+            projects[0] = {**projects[0], "reserved_cents": projects[0]["reserved_cents"] + 1}
+            proposal["projects"] = projects
+            frozen["snapshot"] = proposal
+        else:
+            frozen["sha256"] = "0" * 64
+        changed["approval_proposal"] = frozen
+        plan.fee_policy_snapshot = changed
+
+    with db_factory() as db, pytest.raises(ValidationError) as error:
+        PlanService.approve(db, plan_id)
+    assert error.value.code == "approval_snapshot_invalid"
+    with db_factory() as db:
+        plan = db.get(Plan, plan_id)
+        assert (plan.state, plan.frozen_at, plan.order_attempt) == ("draft", None, 0)
 
 
 def test_approve_does_not_commit_unrelated_caller_work(db_factory):
@@ -755,3 +783,131 @@ def test_approve_does_not_commit_unrelated_caller_work(db_factory):
         assert db.scalar(select(func.count()).select_from(Maintainer).where(
             Maintainer.upstream_key == "approval-unrelated/project"
         )) == 0
+
+
+def test_unverified_legacy_maintainer_is_not_assigned_a_recipient_split(db_factory, tmp_path):
+    with db_factory.begin() as db:
+        session = add_session(db, ["one-source"])
+        add_resolved_project(db, session.id, "one/project", "one-source", opted_in=True)
+        from dividend.config import DEFAULT_POLICY_PATH
+        policy = tmp_path / "single-project-policy.yaml"
+        policy.write_text(DEFAULT_POLICY_PATH.read_text().replace(
+            "per_project_cap_pct: 15", "per_project_cap_pct: 100"
+        ))
+        plan = PlanService.create(db, session.id, 1000, date(2026, 11, 6), policy)
+        line = plan.lines[0]
+        assert line.amount_cents == 1000  # Project allocation amount remains unchanged.
+        assert line.payable_cents == 0
+        assert line.reserved_cents == 1000
+        assert line.maintainer_splits == []
+        assert plan.est_payout_fees_cents == 0
+
+
+@pytest.mark.parametrize("shares", [(10000,), (6000, 4000), (5000, 3000, 2000)])
+def test_configured_shares_and_identity_claims_are_not_contribution_evidence(db_factory, tmp_path, shares):
+    with db_factory.begin() as db:
+        session = add_session(db, ["many-source"])
+        add_resolved_project(db, session.id, "many/project", "many-source", opted_in=True)
+        if len(shares) > 1:
+            for index, share_bps in enumerate(shares):
+                db.add(MaintainerRecipient(
+                    id=str(uuid5(NAMESPACE_URL, f"recipient-{len(shares)}-{index}")),
+                    upstream_key="many/project", display_name=f"Maintainer {index + 1}",
+                    email=f"person-{index + 1}@example.test", opted_in=True,
+                    market_code="US", share_bps=share_bps, active=True,
+                ))
+            db.flush()
+        recipients = list(db.scalars(select(Maintainer).where(Maintainer.upstream_key == "many/project")))
+        recipients += list(db.scalars(select(MaintainerRecipient).where(MaintainerRecipient.upstream_key == "many/project")))
+        for index, recipient in enumerate(recipients, 1):
+            db.add(MaintainerClaim(recipient_id=recipient.id, upstream_key="many/project",
+                                   status="verified", github_user_id=900000 + index,
+                                   github_login=f"maintainer{index}", verified_at=datetime.now(UTC)))
+        db.flush()
+        from dividend.config import DEFAULT_POLICY_PATH
+        policy = tmp_path / f"multi-{len(shares)}-policy.yaml"
+        policy.write_text(DEFAULT_POLICY_PATH.read_text().replace(
+            "per_project_cap_pct: 15", "per_project_cap_pct: 100"
+        ))
+        plan = PlanService.create(db, session.id, 1000, date(2026, 11, 6), policy)
+        line = plan.lines[0]
+        assert line.amount_cents == 1000
+        assert line.payable_cents == 0
+        assert line.reserved_cents == 1000
+        assert line.maintainer_splits == []
+        assert plan.est_payout_fees_cents == 0
+
+
+def test_curl_snapshot_scores_only_explicitly_mapped_server_evidence(db_factory, tmp_path):
+    with db_factory.begin() as db:
+        session = add_session(db, ["curl-source"])
+        add_resolved_project(db, session.id, "github.com/curl/curl", "curl-source", opted_in=True)
+        from dividend.config import DEFAULT_POLICY_PATH
+        policy = tmp_path / "curl-policy.yaml"
+        policy.write_text(DEFAULT_POLICY_PATH.read_text().replace(
+            "per_project_cap_pct: 15", "per_project_cap_pct: 100"
+        ))
+        plan = PlanService.create(db, session.id, 1000, date(2026, 11, 6), policy)
+        line = plan.lines[0]
+        assert line.amount_cents == 1000
+        assert line.payable_cents == 737
+        assert line.reserved_cents == 263
+        assert sum(row["amount_cents"] for row in line.maintainer_splits) == 737
+        assert line.maintainer_splits[0]["share_bps"] == 10000
+        assert plan.payable_total_cents == line.payable_cents
+        assert plan.reserved_total_cents == line.reserved_cents
+
+
+def test_largest_remainder_splits_exact_cents_with_stable_id_ties():
+    recipients = tuple(MaintainerShare(
+        maintainer_id=f"00000000-0000-0000-0000-00000000000{index}",
+        display_name=f"Maintainer {index}", email=f"person{index}@example.test",
+        share_bps=share,
+    ) for index, share in enumerate((3334, 3333, 3333), 1))
+    splits = split_cents_by_share(101, recipients)
+    assert [item["amount_cents"] for item in splits] == [34, 34, 33]
+    assert sum(item["amount_cents"] for item in splits) == 101
+
+
+def test_eligible_share_total_must_be_one_hundred_percent(db_factory):
+    with db_factory() as db:
+        session = add_session(db, ["invalid-share"])
+        add_resolved_project(db, session.id, "invalid/project", "invalid-share", opted_in=True)
+        db.add_all([
+            MaintainerRecipient(id=str(uuid5(NAMESPACE_URL, f"bad-{index}")),
+                                upstream_key="invalid/project", display_name=f"Person {index}",
+                                email=f"person{index}@example.test", opted_in=True,
+                                market_code="US", share_bps=share, active=True)
+            for index, share in enumerate((6000, 3000))
+        ])
+        db.flush()
+        with pytest.raises(AllocationError, match="exactly 100 percent"):
+            PlanService.create(db, session.id, 1000, date(2026, 11, 6))
+
+
+@pytest.mark.parametrize(("opted_in", "market"), [(False, "US"), (True, "CA"), (True, "US")])
+def test_opted_out_ineligible_or_missing_recipient_is_not_paid(db_factory, tmp_path, opted_in, market):
+    with db_factory() as db:
+        session = add_session(db, ["recipient-source"])
+        add_resolved_project(db, session.id, "recipient/project", "recipient-source", opted_in=True)
+        db.add(MaintainerRecipient(
+            id=str(uuid5(NAMESPACE_URL, f"ineligible-{opted_in}-{market}")),
+            upstream_key="recipient/project", display_name="Configured maintainer",
+            email="" if market == "US" and opted_in else "person@example.test",
+            opted_in=opted_in, market_code=market, share_bps=10000, active=True,
+        ))
+        db.flush()
+        if opted_in and market == "US":
+            with pytest.raises(AllocationError, match="invalid recipient details"):
+                PlanService.assemble_allocation_inputs(db, session.id, date(2026, 11, 6))
+        else:
+            from dividend.config import DEFAULT_POLICY_PATH
+            policy = tmp_path / "ineligible-policy.yaml"
+            policy.write_text(DEFAULT_POLICY_PATH.read_text().replace(
+                "per_project_cap_pct: 15", "per_project_cap_pct: 100"
+            ))
+            plan = PlanService.create(db, session.id, 1000, date(2026, 11, 6), policy)
+            line = plan.lines[0]
+            assert line.payable_cents == 0
+            assert line.reserved_cents == 1000
+            assert line.maintainer_splits == []

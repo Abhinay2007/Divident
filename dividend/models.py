@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.engine import Dialect
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
 from .db import Base
@@ -129,6 +129,9 @@ class UpstreamProject(Base):
 
 class Maintainer(Base):
     __tablename__ = "maintainers"
+    __table_args__ = (
+        CheckConstraint("share_bps > 0 AND share_bps <= 10000", name="ck_maintainers_share_bps"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     upstream_key: Mapped[str] = mapped_column(String(256), nullable=False, unique=True)
@@ -136,7 +139,64 @@ class Maintainer(Base):
     email: Mapped[str] = mapped_column(String(256), nullable=False)
     opted_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     market_code: Mapped[str | None] = mapped_column(String(2))
+    share_bps: Mapped[int] = mapped_column(Integer, nullable=False, default=10000)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+
+    additional_recipients: Mapped[list["MaintainerRecipient"]] = relationship(
+        primaryjoin=lambda: Maintainer.upstream_key == foreign(MaintainerRecipient.upstream_key),
+        viewonly=True,
+    )
+
+
+class MaintainerRecipient(Base):
+    """Additional named payees; Maintainer remains the legacy one-per-project row."""
+
+    __tablename__ = "maintainer_recipients"
+    __table_args__ = (
+        CheckConstraint("share_bps > 0 AND share_bps <= 10000", name="ck_maintainer_recipients_share_bps"),
+        Index("ix_maintainer_recipients_upstream_key", "upstream_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    upstream_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str] = mapped_column(String(256), nullable=False)
+    opted_in: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    market_code: Mapped[str | None] = mapped_column(String(2))
+    share_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+
+
+class MaintainerClaim(Base):
+    """GitHub identity claim and short-lived, invitation-backed claim session."""
+
+    __tablename__ = "maintainer_claims"
+    __table_args__ = (
+        UniqueConstraint("recipient_id", name="uq_maintainer_claims_recipient"),
+        UniqueConstraint("github_user_id", name="uq_maintainer_claims_github_user"),
+        CheckConstraint("status IN ('invited', 'pending', 'verified')", name="ck_maintainer_claims_status"),
+        CheckConstraint("github_user_id IS NULL OR github_user_id > 0", name="ck_maintainer_claims_github_id"),
+        Index("ix_maintainer_claims_invitation_hash", "invitation_token_hash", unique=True),
+        Index("ix_maintainer_claims_session_hash", "session_token_hash", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    recipient_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    upstream_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="invited")
+    github_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    github_login: Mapped[str | None] = mapped_column(String(39))
+    invitation_token_hash: Mapped[str | None] = mapped_column(String(64))
+    invitation_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    session_token_hash: Mapped[str | None] = mapped_column(String(64))
+    session_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    oauth_state_hash: Mapped[str | None] = mapped_column(String(64))
+    oauth_code_verifier: Mapped[str | None] = mapped_column(String(128))
+    oauth_state_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+    verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class Plan(Base):
@@ -189,6 +249,8 @@ class PlanLine(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     # Nullable only for legacy rows created before immutable snapshots existed.
     facts_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Frozen recipient identities and integer-cent splits for this plan line.
+    maintainer_splits: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
 
     plan: Mapped["Plan"] = relationship(back_populates="lines")
 
@@ -223,6 +285,8 @@ class PayoutItem(Base):
     batch_id: Mapped[str] = mapped_column(ForeignKey("payout_batches.id"), nullable=False)
     plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"), nullable=False)
     upstream_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    # Polymorphic stable ID: legacy Maintainer or MaintainerRecipient.
+    maintainer_id: Mapped[str | None] = mapped_column(String(36))
     sender_item_id: Mapped[str] = mapped_column(String(63), nullable=False)
     recipient_email: Mapped[str] = mapped_column(String(256), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)

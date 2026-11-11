@@ -102,3 +102,9 @@ def test_invalid_cors_and_database_settings_rejected(tmp_path):
         Settings(**base(tmp_path, CORS_ORIGINS=["not a url"]))
     with pytest.raises(ValidationError, match="DATABASE_URL"):
         Settings(**base(tmp_path, DATABASE_URL="not-a-database-url"))
+
+
+def test_github_oauth_credentials_must_be_configured_as_a_pair(tmp_path):
+    assert Settings(**base(tmp_path)).GITHUB_OAUTH_CLIENT_ID is None
+    with pytest.raises(ValidationError, match="both GITHUB_OAUTH_CLIENT_ID"):
+        Settings(**base(tmp_path, GITHUB_OAUTH_CLIENT_ID="id"))

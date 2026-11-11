@@ -170,10 +170,9 @@ def build(output_dir: Path = ROOT / "data") -> None:
         "expected_unmapped": ["libxcb-doc"],
         "expected_project_count": len(projects),
     })
-    sandbox_keys = [key for key, opted_in in MAINTAINERS if opted_in]
     _write_yaml(output_dir / "demo_sandbox_recipients.example.yaml", {
-        "schema": 1,
-        "recipients": {key: "" for key in sandbox_keys},
+        "schema": 2,
+        "recipients": {},
     })
 
 

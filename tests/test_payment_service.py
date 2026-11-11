@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+from copy import deepcopy
 
 import pytest
 from sqlalchemy import select
@@ -9,10 +10,12 @@ from sqlalchemy import select
 from dividend.db import create_database_engine, create_session_factory, initialize_database
 from dividend.config import DEFAULT_POLICY_PATH
 from dividend.errors import PaymentProviderError, ProviderTimeout, StateError, ValidationError
-from dividend.models import (LedgerEvent, Maintainer, PaymentOperation, PayoutBatch,
-                             PayoutItem, Plan, PlanLine, Session)
-from dividend.payments.base import CaptureResult
+from dividend.models import (LedgerEvent, Maintainer, MaintainerRecipient,
+                             PaymentOperation, PayoutBatch, PayoutItem, Plan,
+                             PlanLine, Session)
+from dividend.payments.base import BatchDetail, CaptureResult, ItemDetail
 from dividend.payments.fake import FakeProvider
+from dividend.services.approval_proposal import freeze_proposal
 from dividend.services.payment_service import PaymentService, _available_funds_cents
 
 
@@ -28,12 +31,13 @@ def db_factory(tmp_path):
 
 
 def make_plan(factory, state="funded", *, charge=350, payable=300, reserved=50,
-              est_fees=50, recipients=True):
+              est_fees=50, recipients=True, plan_id_override=None):
     with factory() as db:
         session = Session(mode="upload", status="ready", source_names=["pkg"], source_count=1)
         db.add(session)
         db.flush()
-        plan = Plan(session_id=session.id, state=state, budget_cents=payable + reserved,
+        plan = Plan(id=plan_id_override, session_id=session.id, state=state,
+                    budget_cents=payable + reserved,
                     payable_total_cents=payable, reserved_total_cents=reserved,
                     est_payout_fees_cents=est_fees, charge_cents=charge,
                     est_incoming_fee_cents=0, fee_policy_version="paypal-us-standard-v1",
@@ -58,16 +62,43 @@ def make_plan(factory, state="funded", *, charge=350, payable=300, reserved=50,
                     order_attempt=1 if state != "draft" else 0)
         db.add(plan)
         db.flush()
+        proposal_projects = []
         for key, amount, line_payable, line_reserved in (
             ("a/project", 100, 100, 0), ("b/project", 200, 200, 0), ("c/project", 50, 0, 50),
         ):
+            maintainer = Maintainer(upstream_key=key, display_name="Maintainer",
+                                    email=f"{key[0]}@example.test",
+                                    opted_in=recipients and key != "c/project",
+                                    market_code="US" if recipients and key != "c/project" else None)
+            db.add(maintainer)
+            db.flush()
+            splits = ([{"maintainer_id": maintainer.id, "display_name": maintainer.display_name,
+                        "share_bps": 10000, "amount_cents": line_payable}]
+                      if line_payable else [])
             db.add(PlanLine(plan_id=plan.id, upstream_key=key, display_name=key,
                             weight=Decimal("1"), amount_cents=amount,
                             payable_cents=line_payable, reserved_cents=line_reserved,
-                            reason="fixture", facts_snapshot={}))
-            db.add(Maintainer(upstream_key=key, display_name="Maintainer",
-                              email=f"{key[0]}@example.test", opted_in=recipients and key != "c/project",
-                              market_code="US" if recipients and key != "c/project" else None))
+                            reason="fixture", facts_snapshot={}, maintainer_splits=splits))
+            proposal_projects.append({
+                "project_id": key, "amount_cents": amount,
+                "payable_cents": line_payable, "reserved_cents": line_reserved,
+                "maintainers": [{"maintainer_id": maintainer.id, "amount_cents": line_payable,
+                                 "share_bps": 10000}] if line_payable else [],
+                "evidence": [],
+            })
+        proposal = {
+            "schema_version": 1, "projects": proposal_projects,
+            "evidence_snapshot": {"snapshot_id": "test-snapshot", "captured_at": "2026-01-01T00:00:00Z"},
+            "identity_mapping": {"mapping_id": "test-mapping", "seeded_demo": True},
+            "allocation_policy_version": plan.fee_policy_version, "currency": "USD",
+        }
+        plan.fee_policy_snapshot = {**plan.fee_policy_snapshot,
+                                   "approval_proposal": freeze_proposal(proposal)}
+        if state != "draft":
+            db.add(LedgerEvent(plan_id=plan.id, type="PLAN_APPROVED", payload={
+                "charge_cents": charge, "order_attempt": 1,
+                "approval_snapshot_sha256": plan.fee_policy_snapshot["approval_proposal"]["sha256"],
+            }))
         plan_id = plan.id
         db.commit()
     return plan_id
@@ -75,6 +106,234 @@ def make_plan(factory, state="funded", *, charge=350, payable=300, reserved=50,
 
 def service(provider, db_factory):
     return PaymentService(provider, "https://dividend.example", db_factory.payment_policy_path)
+
+
+_LEGACY_THIRD = (
+    "cf86a05d-f5a6-43ea-ad7f-ca6936dc0219", "VD4E4K8Q7SWM4",
+    "pcf86a05d-a1-000", "K9JXFBAHPXXCS", 750,
+)
+
+
+def seed_legacy_payout(factory, *, plan_id=None, batch_id=None, sender_item_id=None,
+                       external_item_id=None, amount_cents=None, state="paying",
+                       item_status="pending", keep_proposal=False):
+    defaults = _LEGACY_THIRD
+    plan_id = plan_id or defaults[0]
+    batch_id = batch_id or defaults[1]
+    sender_item_id = sender_item_id or defaults[2]
+    external_item_id = external_item_id or defaults[3]
+    amount_cents = amount_cents or defaults[4]
+    make_plan(factory, state=state, plan_id_override=plan_id)
+    with factory() as db:
+        plan = db.get(Plan, plan_id)
+        plan.payout_attempt = 1
+        if not keep_proposal:
+            plan.fee_policy_snapshot = {
+                key: value for key, value in plan.fee_policy_snapshot.items()
+                if key != "approval_proposal"
+            }
+        batch = PayoutBatch(plan_id=plan_id, attempt=1,
+                            sender_batch_id=f"plan_{plan_id}_payout_1",
+                            external_id=batch_id, status="pending",
+                            estimated_fees_cents=25)
+        db.add(batch)
+        db.flush()
+        db.add(PayoutItem(batch_id=batch.id, plan_id=plan_id,
+                          upstream_key="github.com/curl/curl",
+                          sender_item_id=sender_item_id,
+                          recipient_email="legacy@example.test",
+                          amount_cents=amount_cents, status=item_status,
+                          external_id=external_item_id))
+        db.add(PaymentOperation(
+            plan_id=plan_id, kind="payout", attempt=1, state="confirmed",
+            request_id=f"plan:{plan_id}:payout:1", external_id=batch_id,
+            payout_batch_id=batch.id, prior_plan_state="funded",
+        ))
+        db.commit()
+
+
+class FreshLegacyPayoutProvider(FakeProvider):
+    def __init__(self, detail):
+        super().__init__()
+        self.detail = detail
+        self.reads = 0
+
+    def get_payout_batch(self, batch_id):
+        self.reads += 1
+        return self.detail
+
+
+def legacy_detail(*, batch_id=None, sender_item_id=None, external_item_id=None,
+                  status="SUCCESS", amount_cents=None, currency="USD", fees_cents=25):
+    plan_id, known_batch, known_sender, known_external, known_amount = _LEGACY_THIRD
+    return BatchDetail(
+        batch_id or known_batch, "SUCCESS", fees_cents,
+        [ItemDetail(sender_item_id or known_sender,
+                    external_item_id or known_external, status,
+                    known_amount if amount_cents is None else amount_cents,
+                    currency=currency)],
+    )
+
+
+def test_legacy_reconciliation_records_fresh_success_and_settles_third_plan(db_factory):
+    seed_legacy_payout(db_factory)
+    provider = FreshLegacyPayoutProvider(legacy_detail())
+    with db_factory() as db:
+        result = service(provider, db_factory).reconcile(_LEGACY_THIRD[0], db)
+    assert provider.reads == 1
+    assert result.batches[0].status == "success"
+    assert result.batches[0].items[0].status == "success"
+    with db_factory() as db:
+        assert db.get(Plan, _LEGACY_THIRD[0]).state == "settled"
+        events = list(db.scalars(select(LedgerEvent).where(
+            LedgerEvent.plan_id == _LEGACY_THIRD[0])))
+    assert {event.type for event in events} >= {
+        "PAYOUT_FEE_ACTUALIZED", "PAYOUT_ITEM_SUCCESS", "PLAN_SETTLED",
+    }
+
+
+def test_allowlisted_plan_with_valid_proposal_uses_normal_reconciliation(db_factory):
+    seed_legacy_payout(db_factory, keep_proposal=True)
+    provider = FreshLegacyPayoutProvider(legacy_detail(external_item_id="normal-path-item"))
+    with db_factory() as db:
+        result = service(provider, db_factory).reconcile(_LEGACY_THIRD[0], db)
+    assert provider.reads == 1
+    assert result.batches[0].items[0].status == "success"
+    with db_factory() as db:
+        assert db.get(Plan, _LEGACY_THIRD[0]).state == "settled"
+        assert db.scalar(select(PayoutItem.external_id).where(
+            PayoutItem.plan_id == _LEGACY_THIRD[0])) == "normal-path-item"
+
+
+def test_allowlisted_plan_with_invalid_proposal_fails_without_writes(db_factory):
+    seed_legacy_payout(db_factory)
+    with db_factory() as db:
+        plan = db.get(Plan, _LEGACY_THIRD[0])
+        plan.fee_policy_snapshot = {
+            **plan.fee_policy_snapshot,
+            "approval_proposal": {"snapshot": {"schema_version": 1}, "sha256": "bad"},
+        }
+        db.commit()
+    provider = FreshLegacyPayoutProvider(legacy_detail())
+    with db_factory() as db:
+        before_event_count = len(list(db.scalars(select(LedgerEvent.id).where(
+            LedgerEvent.plan_id == _LEGACY_THIRD[0]))))
+    with db_factory() as db, pytest.raises(ValidationError) as error:
+        service(provider, db_factory).reconcile(_LEGACY_THIRD[0], db)
+    assert error.value.code == "approval_snapshot_invalid"
+    assert provider.reads == 0
+    with db_factory() as db:
+        assert db.get(Plan, _LEGACY_THIRD[0]).state == "paying"
+        assert db.scalar(select(PayoutBatch.status).where(
+            PayoutBatch.plan_id == _LEGACY_THIRD[0])) == "pending"
+        assert len(list(db.scalars(select(LedgerEvent.id).where(
+            LedgerEvent.plan_id == _LEGACY_THIRD[0])))) == before_event_count
+
+
+def test_allowlisted_valid_proposal_provider_mismatch_has_no_writes(db_factory):
+    seed_legacy_payout(db_factory, keep_proposal=True)
+    provider = FreshLegacyPayoutProvider(legacy_detail(amount_cents=751))
+    with db_factory() as db:
+        before_event_count = len(list(db.scalars(select(LedgerEvent.id).where(
+            LedgerEvent.plan_id == _LEGACY_THIRD[0]))))
+    with db_factory() as db, pytest.raises(PaymentProviderError):
+        service(provider, db_factory).reconcile(_LEGACY_THIRD[0], db)
+    with db_factory() as db:
+        assert provider.reads == 1
+        assert db.get(Plan, _LEGACY_THIRD[0]).state == "paying"
+        assert db.scalar(select(PayoutBatch.status).where(
+            PayoutBatch.plan_id == _LEGACY_THIRD[0])) == "pending"
+        assert db.scalar(select(PayoutItem.status).where(
+            PayoutItem.plan_id == _LEGACY_THIRD[0])) == "pending"
+        assert len(list(db.scalars(select(LedgerEvent.id).where(
+            LedgerEvent.plan_id == _LEGACY_THIRD[0])))) == before_event_count
+
+
+@pytest.mark.parametrize("plan_id,batch_id,sender_item_id,external_item_id,amount", [
+    ("0619cc2d-8b5c-4a90-b709-0ebe07acb7f8", "SWFXHXW893NQY",
+     "p0619cc2d-a1-000", "BQ3NESV9D4BS6", 750),
+    ("2f313a2f-f738-476f-9af2-9e2f970b8918", "F27CU8WP649RA",
+     "p2f313a2f-a1-000", "FMAPC8HZCXVCY", 1200),
+])
+def test_legacy_reconciliation_preserves_already_settled_plans(
+        db_factory, plan_id, batch_id, sender_item_id, external_item_id, amount):
+    seed_legacy_payout(db_factory, plan_id=plan_id, batch_id=batch_id,
+                       sender_item_id=sender_item_id, external_item_id=external_item_id,
+                       amount_cents=amount, state="settled", item_status="success")
+    detail = BatchDetail(batch_id, "SUCCESS", 25, [ItemDetail(
+        sender_item_id, external_item_id, "SUCCESS", amount, currency="USD")])
+    provider = FreshLegacyPayoutProvider(detail)
+    with db_factory() as db:
+        result = service(provider, db_factory).reconcile(plan_id, db)
+    assert result.batches[0].status == "success"
+    with db_factory() as db:
+        assert db.get(Plan, plan_id).state == "settled"
+        assert db.scalar(select(PayoutItem.status).where(
+            PayoutItem.plan_id == plan_id)) == "success"
+        assert db.scalar(select(LedgerEvent.id).where(
+            LedgerEvent.plan_id == plan_id, LedgerEvent.type == "PLAN_SETTLED")) is None
+
+
+@pytest.mark.parametrize("detail", [
+    legacy_detail(batch_id="OTHER-BATCH"),
+    legacy_detail(sender_item_id="wrong-sender-item"),
+    legacy_detail(external_item_id="wrong-provider-item"),
+    legacy_detail(status="FUTURE_STATUS"),
+    legacy_detail(amount_cents=751),
+    legacy_detail(currency="EUR"),
+])
+def test_legacy_reconciliation_mismatch_keeps_local_state_unchanged(db_factory, detail):
+    seed_legacy_payout(db_factory)
+    provider = FreshLegacyPayoutProvider(detail)
+    with db_factory() as db, pytest.raises(PaymentProviderError):
+        service(provider, db_factory).reconcile(_LEGACY_THIRD[0], db)
+    with db_factory() as db:
+        assert db.get(Plan, _LEGACY_THIRD[0]).state == "paying"
+        assert db.scalar(select(PayoutBatch.status).where(
+            PayoutBatch.plan_id == _LEGACY_THIRD[0])) == "pending"
+        assert db.scalar(select(PayoutItem.status).where(
+            PayoutItem.plan_id == _LEGACY_THIRD[0])) == "pending"
+        assert db.scalar(select(LedgerEvent.id).where(
+            LedgerEvent.plan_id == _LEGACY_THIRD[0],
+            LedgerEvent.type == "PAYOUT_ITEM_SUCCESS")) is None
+
+
+def test_legacy_reconciliation_is_idempotent(db_factory):
+    seed_legacy_payout(db_factory)
+    provider = FreshLegacyPayoutProvider(legacy_detail())
+    payments = service(provider, db_factory)
+    for _ in range(2):
+        with db_factory() as db:
+            payments.reconcile(_LEGACY_THIRD[0], db)
+    with db_factory() as db:
+        for event_type in ("PAYOUT_FEE_ACTUALIZED", "PAYOUT_ITEM_SUCCESS", "PLAN_SETTLED"):
+            assert db.scalar(select(LedgerEvent.id).where(
+                LedgerEvent.plan_id == _LEGACY_THIRD[0],
+                LedgerEvent.type == event_type)) is not None
+            assert len(list(db.scalars(select(LedgerEvent.id).where(
+                LedgerEvent.plan_id == _LEGACY_THIRD[0],
+                LedgerEvent.type == event_type)))) == 1
+    assert provider.reads == 2
+
+
+def test_legacy_reconciliation_rejects_non_legacy_plan(db_factory):
+    plan_id = make_plan(db_factory, state="paying")
+    with db_factory() as db:
+        plan = db.get(Plan, plan_id)
+        plan.fee_policy_snapshot = {
+            key: value for key, value in plan.fee_policy_snapshot.items()
+            if key != "approval_proposal"
+        }
+        db.commit()
+    provider = FreshLegacyPayoutProvider(legacy_detail())
+    with db_factory() as db, pytest.raises(ValidationError) as error:
+        service(provider, db_factory).reconcile(plan_id, db)
+    assert error.value.code == "approval_snapshot_invalid"
+    assert provider.reads == 0
+    with db_factory() as db:
+        assert db.get(Plan, plan_id).state == "paying"
+        assert db.scalar(select(PayoutBatch.id).where(
+            PayoutBatch.plan_id == plan_id)) is None
 
 
 def unmeasured_service(provider, factory):
@@ -126,6 +385,23 @@ def test_unmeasured_policy_blocks_order_even_with_populated_charge(db_factory):
         assert (plan.state, plan.frozen_at, plan.order_attempt) == ("draft", None, 0)
 
 
+def test_tampered_approved_snapshot_blocks_payout(db_factory):
+    plan_id = make_plan(db_factory, "funded")
+    with db_factory() as db:
+        plan = db.get(Plan, plan_id)
+        stored = deepcopy(plan.fee_policy_snapshot["approval_proposal"])
+        proposal = stored["snapshot"]
+        proposal["projects"][0]["amount_cents"] += 1
+        plan.fee_policy_snapshot = {**plan.fee_policy_snapshot,
+                                    "approval_proposal": {**stored, "snapshot": proposal}}
+        db.commit()
+    provider = FakeProvider()
+    with db_factory() as db, pytest.raises(ValidationError) as error:
+        service(provider, db_factory).payout(plan_id, db)
+    assert error.value.code == "approval_snapshot_invalid"
+    assert provider.batches == {}
+
+
 def test_unmeasured_policy_blocks_capture_before_provider_call(db_factory):
     plan_id = make_plan(db_factory, "funding", charge=350, est_fees=0)
     provider = FakeProvider()
@@ -141,7 +417,9 @@ def test_unmeasured_policy_blocks_capture_before_provider_call(db_factory):
         assert (plan.capture_attempt, plan.state) == (0, "funding")
         assert db.scalar(select(PaymentOperation.id).where(
             PaymentOperation.plan_id == plan_id, PaymentOperation.kind == "capture")) is None
-        assert db.scalar(select(LedgerEvent.id).where(LedgerEvent.plan_id == plan_id)) is None
+        assert {row.type for row in db.scalars(select(LedgerEvent).where(
+            LedgerEvent.plan_id == plan_id
+        ))} == {"PLAN_APPROVED"}
 
 
 def test_non_us_or_unreported_payer_market_blocks_new_capture(db_factory):
@@ -570,6 +848,94 @@ def test_payout_excludes_reserved_lines_and_retries_only_confirmed_failed_items(
     assert len(rows) == 3
     assert len(batches) == 2
     assert all(row.amount_cents > 0 for row in rows)
+
+
+def _configure_two_recipient_project(factory, plan_id):
+    ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]
+    with factory() as db:
+        plan = db.get(Plan, plan_id)
+        plan.capture_net_cents = 500
+        line = db.scalar(select(PlanLine).where(
+            PlanLine.plan_id == plan_id, PlanLine.upstream_key == "a/project"
+        ))
+        line.maintainer_splits = [
+            {"maintainer_id": ids[0], "display_name": "A one", "share_bps": 5000, "amount_cents": 50},
+            {"maintainer_id": ids[1], "display_name": "A two", "share_bps": 5000, "amount_cents": 50},
+        ]
+        frozen = plan.fee_policy_snapshot["approval_proposal"]
+        proposal = frozen["snapshot"]
+        project = next(row for row in proposal["projects"] if row["project_id"] == "a/project")
+        project["maintainers"] = [
+            {"maintainer_id": ids[0], "share_bps": 5000, "amount_cents": 50},
+            {"maintainer_id": ids[1], "share_bps": 5000, "amount_cents": 50},
+        ]
+        plan.fee_policy_snapshot = {**plan.fee_policy_snapshot,
+                                    "approval_proposal": freeze_proposal(proposal)}
+        approval = db.scalar(select(LedgerEvent).where(
+            LedgerEvent.plan_id == plan_id, LedgerEvent.type == "PLAN_APPROVED"
+        ))
+        approval.payload = {**approval.payload, "approval_snapshot_sha256":
+                            plan.fee_policy_snapshot["approval_proposal"]["sha256"]}
+        db.add_all([
+            MaintainerRecipient(id=ids[0], upstream_key="a/project", display_name="A one",
+                                email="one@example.test", opted_in=True, market_code="US",
+                                share_bps=5000, active=True),
+            MaintainerRecipient(id=ids[1], upstream_key="a/project", display_name="A two",
+                                email="two@example.test", opted_in=True, market_code="US",
+                                share_bps=5000, active=True),
+        ])
+        db.commit()
+    return ids
+
+
+def test_multiple_project_recipients_get_independent_items_and_failed_only_retry(db_factory):
+    plan_id = make_plan(db_factory)
+    recipient_ids = _configure_two_recipient_project(db_factory, plan_id)
+    provider = FakeProvider(outcomes={f"p{plan_id[:8]}-a1-001": "failed"})
+    payments = service(provider, db_factory)
+
+    with db_factory() as db:
+        first = payments.payout(plan_id, db)
+    assert first.item_count == 3
+    with db_factory() as db:
+        legacy_id = db.scalar(select(Maintainer.id).where(Maintainer.upstream_key == "b/project"))
+    with db_factory() as db:
+        result = payments.reconcile(plan_id, db)
+    first_items = result.batches[0].items
+    assert len(first_items) == 3
+    assert {item.maintainer_id for item in first_items} == set(recipient_ids) | {legacy_id}
+    assert [item.status for item in first_items].count("failed") == 1
+    assert [item.status for item in first_items].count("success") == 2
+    with db_factory() as db:
+        retried = payments.retry_payout(plan_id, db)
+    assert retried.item_count == 1
+    with db_factory() as db:
+        all_items = list(db.scalars(select(PayoutItem).where(
+            PayoutItem.plan_id == plan_id
+        ).order_by(PayoutItem.sender_item_id)))
+    assert len(all_items) == 4
+    assert len({item.sender_item_id for item in all_items}) == 4
+    assert sum(item.amount_cents for item in all_items if item.status == "success") == 300
+
+
+def test_multiple_recipient_pending_item_stays_reserved_and_blocks_retry(db_factory):
+    plan_id = make_plan(db_factory)
+    _configure_two_recipient_project(db_factory, plan_id)
+    provider = FakeProvider(outcomes={f"p{plan_id[:8]}-a1-001": "pending"})
+    payments = service(provider, db_factory)
+    with db_factory() as db:
+        payments.payout(plan_id, db)
+    with db_factory() as db:
+        result = payments.reconcile(plan_id, db)
+        assert {item.status for item in result.batches[0].items} == {"success", "pending"}
+        assert _available_funds_cents(db) == 125
+    with db_factory() as db:
+        pending_retry = payments.retry_payout(plan_id, db)
+        assert pending_retry.item_count == 3
+        assert pending_retry.state == "success"
+    assert len(provider.batches) == 1
+    with db_factory() as db:
+        assert _available_funds_cents(db) >= 0
 
 
 def test_available_funds_reserves_pending_unknown_and_releases_confirmed_failure(db_factory):

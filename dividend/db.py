@@ -98,8 +98,8 @@ def initialize_database(engine: Engine, metadata=None) -> None:
         }:
             with engine.begin() as connection:
                 connection.exec_driver_sql("ALTER TABLE payout_items ADD COLUMN failure_reason VARCHAR(512)")
-        _upgrade_plan_persistence(engine)
-        _upgrade_payment_operations(engine)
+        # These fee/accounting columns are read by the plan and operation
+        # migrations below, so add them before either migration selects rows.
         inspector = inspect(engine)
         for table, definitions in {
             "plans": {
@@ -107,7 +107,13 @@ def initialize_database(engine: Engine, metadata=None) -> None:
                 "fee_policy_version": "VARCHAR(64)",
                 "fee_policy_snapshot": "JSON",
             },
-            "maintainers": {"market_code": "VARCHAR(2)"},
+            "plan_lines": {"maintainer_splits": "JSON"},
+            "maintainers": {
+                "market_code": "VARCHAR(2)",
+                "share_bps": "INTEGER NOT NULL DEFAULT 10000",
+                "active": "BOOLEAN NOT NULL DEFAULT 1",
+            },
+            "payout_items": {"maintainer_id": "VARCHAR(36)"},
             "payout_batches": {"estimated_fees_cents": "INTEGER"},
         }.items():
             if table not in inspector.get_table_names():
@@ -121,6 +127,40 @@ def initialize_database(engine: Engine, metadata=None) -> None:
                             f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"
                         )
                 inspector = inspect(engine)
+        _upgrade_plan_persistence(engine)
+        _upgrade_maintainer_recipients(engine)
+        _upgrade_payment_operations(engine)
+
+
+def _upgrade_maintainer_recipients(engine: Engine) -> None:
+    """Freeze the legacy one-recipient plan split without rewriting old records."""
+    from .models import Maintainer, PlanLine
+
+    line_table = PlanLine.__table__
+    maintainer_table = Maintainer.__table__
+    with engine.begin() as connection:
+        maintainers = {
+            row["upstream_key"]: row
+            for row in connection.execute(select(maintainer_table)).mappings()
+        }
+        lines = connection.execute(select(line_table).where(
+            line_table.c.maintainer_splits.is_(None)
+        )).mappings().all()
+        for line in lines:
+            row = maintainers.get(line["upstream_key"])
+            splits = []
+            if (line["payable_cents"] > 0 and row is not None
+                    and row["opted_in"] is True and row["market_code"] == "US"):
+                splits = [{
+                    "maintainer_id": row["id"],
+                    "display_name": row["display_name"],
+                    "share_bps": 10000,
+                    "amount_cents": line["payable_cents"],
+                }]
+            connection.execute(
+                line_table.update().where(line_table.c.id == line["id"])
+                .values(maintainer_splits=splits)
+            )
 
 
 def _upgrade_payment_operations(engine: Engine) -> None:

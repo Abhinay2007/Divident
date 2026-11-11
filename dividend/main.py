@@ -21,19 +21,22 @@ from .errors import (
 from .api.middleware import RequestContextMiddleware
 from .api.routes_plans import router as plans_router
 from .api.routes_sessions import router as sessions_router
+from .api.routes_workspace import router as workspace_router
+from .api.routes_maintainer_claims import router as maintainer_claims_router
 from .schemas import ConfigResponse, HealthResponse
 from .enrichment.fixtures import FixtureEnricher
 from .enrichment.github_client import GitHubClient
 from .enrichment.live import LiveEnricher
 from .enrichment.udd_client import UDDClient
 from .upstream.overrides import load_overrides
-from .services import SessionService
+from .services import EvidenceReviewService, SessionService
 from .payments.fake import FakeProvider
 from .payments.paypal import PayPalProvider
 from .llm.groq_provider import GroqProvider
-from .llm.limits import LiveResolutionLimits
+from .llm.limits import GroqRequestBudget, LiveResolutionLimits
 from .services.payment_service import PaymentService
 from .services.config_service import ConfigService
+from .services.maintainer_claim_service import ClaimError, MaintainerClaimService
 from .demo import seed_demo_if_empty
 
 
@@ -64,7 +67,10 @@ def create_app(
     llm_limits = LiveResolutionLimits(configured.LLM_MAX_SOURCES_PER_SESSION,
                                       configured.LLM_MAX_CALLS_PER_HOUR) if llm_enabled else None
     if resolver_provider is None and llm_enabled:
-        resolver_provider = GroqProvider(configured.GROQ_API_KEY or "", configured.LLM_MODEL)
+        resolver_provider = GroqProvider(
+            configured.GROQ_API_KEY or "", configured.LLM_MODEL,
+            budget=GroqRequestBudget(factory),
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -85,9 +91,16 @@ def create_app(
     app.state.settings = configured
     app.state.engine = app_engine
     app.state.session_factory = factory
+    app.state.maintainer_claim_service = MaintainerClaimService(
+        configured.GITHUB_OAUTH_CLIENT_ID, configured.GITHUB_OAUTH_CLIENT_SECRET,
+        str(configured.PUBLIC_BASE_URL),
+    )
     app.state.provider = provider
     app.state.llm = resolver_provider
     app.state.llm_limits = llm_limits
+    app.state.evidence_review_service = EvidenceReviewService(
+        factory, resolver_provider, configured.LLM_MODEL,
+    )
     app.state.payment_service = (
         PaymentService(provider, str(configured.PUBLIC_BASE_URL),
                        configured.allocation_policy_path
@@ -129,7 +142,9 @@ def create_app(
     app.state.resolution_runner = resolution_runner
     app.add_middleware(RequestContextMiddleware)
     app.include_router(sessions_router)
+    app.include_router(workspace_router)
     app.include_router(plans_router)
+    app.include_router(maintainer_claims_router)
 
     def request_id(request: Request) -> str:
         return request.scope.get("state", {}).get("request_id", "")
@@ -165,6 +180,13 @@ def create_app(
         return JSONResponse(status_code=exc.status_code, content={
             "error": "authentication_error" if exc.status_code == 401 else "http_error",
             **detail, "request_id": request_id(request),
+        })
+
+    @app.exception_handler(ClaimError)
+    async def handle_claim_error(request: Request, exc: ClaimError):
+        return JSONResponse(status_code=exc.status_code, content={
+            "error": "maintainer_claim_error", "code": exc.code,
+            "request_id": request_id(request),
         })
 
     @app.exception_handler(StateError)

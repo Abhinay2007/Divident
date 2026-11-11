@@ -49,6 +49,7 @@ class ItemDetail:
     raw_status: str
     amount_cents: int
     failure_reason: str | None = None
+    currency: str = "USD"
 
 
 @dataclass(frozen=True, slots=True)

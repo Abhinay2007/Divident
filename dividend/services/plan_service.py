@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+import hmac
+import re
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session as DbSession
@@ -11,11 +13,18 @@ from ..allocation import (
     load_allocation_policy,
 )
 from ..allocation.snapshot import build_facts_snapshot
+from ..allocation.maintainer import SERVER_EVIDENCE_PROVENANCE, distribute
 from ..errors import CaptureMismatch, NotFoundError, StateError, ValidationError
 from ..ledger import LedgerService, append as append_ledger_event
-from ..models import Maintainer, Plan, PlanLine, Session, SourceResolution, UpstreamProject
+from ..models import (LedgerEvent, Maintainer, MaintainerRecipient, Plan,
+                      PlanLine, Session, SourceResolution, UpstreamProject)
+from .approval_proposal import freeze_proposal, proposal_sha256
+from .maintainer_evidence import load_demo_identity_map, load_evidence_snapshot_context
 from ..payments.fees import (ROUNDING_POLICY, calculate_gross_charge_cents,
                              estimate_payout_fee_cents)
+
+_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+_REPOSITORY_KEY = "github.com/curl/curl"
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,10 +33,172 @@ class AllocationInputSet:
 
     projects: tuple[ProjectInput, ...]
     evaluation_date: date
+    recipients_by_project: dict[str, tuple["MaintainerShare", ...]] | None = None
+    evidence_by_project: dict[str, tuple[dict, ...]] | None = None
+    evidence_context: dict | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MaintainerShare:
+    maintainer_id: str
+    display_name: str
+    email: str
+    share_bps: int
+
+
+def split_cents_by_share(amount_cents: int, recipients: tuple[MaintainerShare, ...]) -> list[dict]:
+    """Split cents by basis points using largest remainder and stable ID ties."""
+    if type(amount_cents) is not int or amount_cents < 0:
+        raise AllocationError("recipient split amount must be nonnegative integer cents")
+    if amount_cents == 0:
+        return []
+    if not recipients:
+        return []
+    if sum(item.share_bps for item in recipients) != 10000:
+        raise AllocationError("eligible maintainer shares must total exactly 100 percent")
+    if amount_cents < len(recipients):
+        raise AllocationError("payable allocation is too small to pay every eligible maintainer")
+    floors, remainders = {}, {}
+    for item in recipients:
+        floors[item.maintainer_id], remainders[item.maintainer_id] = divmod(
+            amount_cents * item.share_bps, 10000,
+        )
+    remaining = amount_cents - sum(floors.values())
+    for maintainer_id in sorted(remainders, key=lambda key: (-remainders[key], key))[:remaining]:
+        floors[maintainer_id] += 1
+    if any(floors[item.maintainer_id] <= 0 for item in recipients):
+        raise AllocationError("payable allocation cannot fund every eligible maintainer share")
+    return [{
+        "maintainer_id": item.maintainer_id,
+        "display_name": item.display_name,
+        "share_bps": item.share_bps,
+        "amount_cents": floors[item.maintainer_id],
+    } for item in sorted(recipients, key=lambda value: value.maintainer_id)]
 
 
 class PlanService:
     """Application boundary for preparing inputs to the pure allocator."""
+
+    @staticmethod
+    def _score_maintainers(lines, inputs: AllocationInputSet) -> dict[str, dict]:
+        scored = {}
+        for line in lines:
+            recipients = [{"id": row.maintainer_id, "display_name": row.display_name,
+                           "opted_in": True}
+                          for row in (inputs.recipients_by_project or {}).get(line.upstream_key, ())]
+            result = distribute(
+                line.payable_cents, recipients,
+                list((inputs.evidence_by_project or {}).get(line.upstream_key, ())),
+            )
+            splits = [{key: row[key] for key in (
+                "maintainer_id", "display_name", "share_bps", "amount_cents",
+            )} for row in result["maintainers"] if row["amount_cents"] > 0]
+            payable = sum(row["amount_cents"] for row in splits)
+            reserved = line.reserved_cents + result["reserved_cents"]
+            if payable + reserved != line.amount_cents:
+                raise AllocationError("maintainer evidence allocation does not preserve project cents")
+            scored[line.upstream_key] = {
+                "payable_cents": payable, "reserved_cents": reserved,
+                "maintainers": splits,
+            }
+        return scored
+
+    @staticmethod
+    def _approval_proposal(lines, allocations: dict[str, dict], inputs: AllocationInputSet,
+                           policy_version: str) -> dict:
+        context = inputs.evidence_context or {}
+        projects = []
+        for line in sorted(lines, key=lambda row: row.upstream_key):
+            evidence = (inputs.evidence_by_project or {}).get(line.upstream_key, ())
+            projects.append({
+                "project_id": line.upstream_key,
+                "amount_cents": line.amount_cents,
+                "payable_cents": allocations[line.upstream_key]["payable_cents"],
+                "maintainers": [{
+                    "maintainer_id": row["maintainer_id"],
+                    "amount_cents": row["amount_cents"],
+                    "share_bps": row["share_bps"],
+                } for row in allocations[line.upstream_key]["maintainers"]],
+                "reserved_cents": allocations[line.upstream_key]["reserved_cents"],
+                "evidence": [{
+                    "event_id": row["event_id"], "github_user_id": row["github_user_id"],
+                    "signal_type": row["signal_type"], "pr_id": row["pr_id"],
+                    "pr_number": row["pr_number"], "source_url": row["reference"],
+                    "timestamp": row["timestamp"],
+                    "mapped_maintainer_id": row["maintainer_id"],
+                } for row in evidence],
+            })
+        return {
+            "schema_version": 1,
+            "projects": projects,
+            "evidence_snapshot": {
+                "snapshot_id": context.get("snapshot_id"),
+                "captured_at": context.get("captured_at"),
+            },
+            "identity_mapping": {
+                "mapping_id": context.get("identity_mapping_id"),
+                "seeded_demo": context.get("seeded_demo") is True,
+            },
+            "allocation_policy_version": policy_version,
+            "currency": "USD",
+        }
+
+    @staticmethod
+    def verify_approval_proposal(db: DbSession, plan: Plan) -> str:
+        snapshot = plan.fee_policy_snapshot
+        frozen = snapshot.get("approval_proposal") if type(snapshot) is dict else None
+        proposal = frozen.get("snapshot") if type(frozen) is dict else None
+        stored_hash = frozen.get("sha256") if type(frozen) is dict else None
+        if (type(proposal) is not dict or type(stored_hash) is not str
+                or type(proposal.get("projects")) is not list
+                or type(proposal.get("evidence_snapshot")) is not dict
+                or type(proposal.get("identity_mapping")) is not dict
+                or proposal.get("schema_version") != 1
+                or proposal.get("currency") != "USD"
+                or proposal.get("allocation_policy_version") != plan.fee_policy_version):
+            raise ValidationError("Approval proposal snapshot is missing or has failed integrity verification",
+                                  code="approval_snapshot_invalid")
+        try:
+            valid_hash = hmac.compare_digest(proposal_sha256(proposal), stored_hash)
+        except (TypeError, ValueError):
+            valid_hash = False
+        if not valid_hash:
+            raise ValidationError("Approval proposal snapshot is missing or has failed integrity verification",
+                                  code="approval_snapshot_invalid")
+        expected = [{
+            "project_id": line.upstream_key,
+            "amount_cents": line.amount_cents,
+            "payable_cents": line.payable_cents,
+            "reserved_cents": line.reserved_cents,
+            "maintainers": sorted([
+                {"maintainer_id": row.get("maintainer_id"),
+                 "amount_cents": row.get("amount_cents"), "share_bps": row.get("share_bps")}
+                for row in (line.maintainer_splits or []) if type(row) is dict
+            ], key=lambda row: row["maintainer_id"] or ""),
+        } for line in sorted(plan.lines, key=lambda row: row.upstream_key)]
+        actual = [{
+            "project_id": row.get("project_id"),
+            "amount_cents": row.get("amount_cents"),
+            "payable_cents": row.get("payable_cents"),
+            "reserved_cents": row.get("reserved_cents"),
+            "maintainers": sorted(row.get("maintainers", []), key=lambda item: item.get("maintainer_id", "")),
+        } for row in proposal.get("projects", []) if type(row) is dict]
+        if (actual != expected
+                or any(row["payable_cents"] != sum(item["amount_cents"] for item in row["maintainers"])
+                       for row in expected)
+                or sum(row["amount_cents"] for row in expected) != plan.budget_cents
+                or sum(row["payable_cents"] for row in expected) != plan.payable_total_cents
+                or sum(row["reserved_cents"] for row in expected) != plan.reserved_total_cents):
+            raise ValidationError("Approval proposal does not match the persisted plan lines",
+                                  code="approval_snapshot_invalid")
+        if plan.frozen_at is not None:
+            event = db.scalar(select(LedgerEvent).where(
+                LedgerEvent.plan_id == plan.id, LedgerEvent.type == "PLAN_APPROVED",
+            ).order_by(LedgerEvent.created_at.desc()).limit(1))
+            if event is None or event.payload.get("approval_snapshot_sha256") != stored_hash:
+                raise ValidationError("Approved proposal hash does not match its ledger record",
+                                      code="approval_snapshot_invalid")
+        return stored_hash
 
     @staticmethod
     def assemble_allocation_inputs(
@@ -179,24 +350,59 @@ class PlanService:
             raise AllocationError("session has no eligible upstream projects")
 
         project_keys = [project.upstream_key for project in projects]
-        maintainer_rows = db.execute(
-            select(Maintainer.upstream_key, Maintainer.opted_in).where(
-                Maintainer.upstream_key.in_(project_keys)
-            )
-        ).all()
+        legacy_rows = list(db.scalars(select(Maintainer).where(
+            Maintainer.upstream_key.in_(project_keys)
+        )))
+        additional_rows = list(db.scalars(select(MaintainerRecipient).where(
+            MaintainerRecipient.upstream_key.in_(project_keys)
+        )))
+        legacy_by_key = {row.upstream_key: row for row in legacy_rows}
+        additional_by_key: dict[str, list[MaintainerRecipient]] = {}
+        for row in additional_rows:
+            additional_by_key.setdefault(row.upstream_key, []).append(row)
+
+        recipients_by_key: dict[str, tuple[MaintainerShare, ...]] = {}
         opted_in_by_key: dict[str, bool] = {}
-        market_rows = db.execute(
-            select(Maintainer.upstream_key, Maintainer.market_code).where(
-                Maintainer.upstream_key.in_(project_keys)
-            )
-        ).all()
-        market_by_key = dict(market_rows)
-        for upstream_key, opted_in in maintainer_rows:
-            if upstream_key in opted_in_by_key:
-                raise AllocationError(f"duplicate maintainer for {upstream_key!r}")
-            if type(opted_in) is not bool:
-                raise AllocationError(f"invalid maintainer opt-in for {upstream_key!r}")
-            opted_in_by_key[upstream_key] = opted_in
+        for key in project_keys:
+            # Explicit multi-recipient records replace the legacy row for new plans.
+            rows = additional_by_key.get(key)
+            candidates = rows if rows is not None else ([legacy_by_key[key]] if key in legacy_by_key else [])
+            configured_eligible = []
+            for row in candidates:
+                if type(row.opted_in) is not bool:
+                    raise AllocationError(f"invalid maintainer opt-in for {key!r}")
+                active = row.active
+                if row.opted_in is True and active is True and row.market_code == "US":
+                    if type(row.email) is not str or not _EMAIL.fullmatch(row.email):
+                        raise AllocationError(f"eligible maintainer has invalid recipient details for {key!r}")
+                    share_bps = row.share_bps
+                    if type(share_bps) is not int or not 1 <= share_bps <= 10000:
+                        raise AllocationError(f"invalid maintainer share for {key!r}")
+                    configured_eligible.append(MaintainerShare(
+                        row.id, row.display_name, row.email, share_bps,
+                    ))
+            if configured_eligible and sum(row.share_bps for row in configured_eligible) != 10000:
+                raise AllocationError(f"eligible maintainer shares for {key!r} must total exactly 100 percent")
+            # These records identify eligible payees; configured shares are not
+            # contribution evidence and never affect the evidence scorer.
+            recipients_by_key[key] = tuple(configured_eligible)
+            opted_in_by_key[key] = bool(configured_eligible)
+
+        evidence_context = load_evidence_snapshot_context()
+        evidence_by_key: dict[str, tuple[dict, ...]] = {}
+        if _REPOSITORY_KEY in project_keys:
+            identity_map = load_demo_identity_map()
+            legacy_id_by_key = {row.upstream_key: row.id for row in legacy_rows}
+            for evidence in evidence_context["evidence"]:
+                upstream_key = identity_map.get(evidence["github_user_id"])
+                maintainer_id = legacy_id_by_key.get(upstream_key)
+                evidence_by_key.setdefault(_REPOSITORY_KEY, ())
+                evidence_by_key[_REPOSITORY_KEY] += ({
+                    **evidence,
+                    "maintainer_id": maintainer_id,
+                    # Ignore snapshot flags; mark provenance only after validation.
+                    "provenance": SERVER_EVIDENCE_PROVENANCE,
+                },)
 
         assembled: list[ProjectInput] = []
         for project in sorted(projects, key=lambda item: item.upstream_key):
@@ -223,15 +429,15 @@ class PlanService:
                     display_name=project.display_name,
                     binary_count=project.binary_count,
                     facts=facts,
-                    opted_in=(opted_in_by_key.get(project.upstream_key, False)
-                              and market_by_key.get(project.upstream_key) == "US"),
+                    opted_in=opted_in_by_key.get(project.upstream_key, False),
                 ))
             except (TypeError, ValueError) as exc:
                 raise AllocationError(
                     f"invalid persisted allocation facts for {project.upstream_key!r}: {exc}"
                 ) from exc
 
-        return AllocationInputSet(tuple(assembled), evaluation_date)
+        return AllocationInputSet(tuple(assembled), evaluation_date, recipients_by_key,
+                                  evidence_by_key, evidence_context)
 
     @staticmethod
     def create(
@@ -257,11 +463,18 @@ class PlanService:
             raise AllocationError("session has no eligible upstream projects")
         policy = load_allocation_policy(policy_path) if policy_path is not None else load_allocation_policy()
         result = allocate(list(inputs.projects), budget_cents, policy, inputs.evaluation_date)
+        line_allocations = PlanService._score_maintainers(result.lines, inputs)
+        payable_total_cents = sum(row["payable_cents"] for row in line_allocations.values())
+        reserved_total_cents = sum(row["reserved_cents"] for row in line_allocations.values())
         estimates = PlanService._fee_calculation(
-            result.payable_total_cents,
-            sum(line.payable_cents > 0 for line in result.lines),
+            payable_total_cents,
+            sum(len(row["maintainers"]) for row in line_allocations.values()),
             policy.fees,
         )
+        proposal = PlanService._approval_proposal(
+            result.lines, line_allocations, inputs, policy.fees.version,
+        )
+        fee_snapshot = {**estimates, "approval_proposal": freeze_proposal(proposal)}
 
         # The allocator emits canonical upstream-key order. Keep that ordering
         # explicit at persistence even if its result implementation changes.
@@ -270,13 +483,13 @@ class PlanService:
             session_id=session_id,
             state="draft",
             budget_cents=budget_cents,
-            payable_total_cents=result.payable_total_cents,
-            reserved_total_cents=result.reserved_total_cents,
+            payable_total_cents=payable_total_cents,
+            reserved_total_cents=reserved_total_cents,
             est_payout_fees_cents=estimates["estimated_payout_fee_cents"],
             est_incoming_fee_cents=estimates["estimated_incoming_fee_cents"],
             charge_cents=estimates["gross_charge_cents"],
             fee_policy_version=policy.fees.version,
-            fee_policy_snapshot=estimates,
+            fee_policy_snapshot=fee_snapshot,
         )
 
         connection = db.connection()
@@ -297,10 +510,11 @@ class PlanService:
                     display_name=line.display_name,
                     weight=line.weight,
                     amount_cents=line.amount_cents,
-                    payable_cents=line.payable_cents,
-                    reserved_cents=line.reserved_cents,
+                    payable_cents=line_allocations[line.upstream_key]["payable_cents"],
+                    reserved_cents=line_allocations[line.upstream_key]["reserved_cents"],
                     reason=line.reason,
                     facts_snapshot=line.facts_snapshot.to_dict(),
+                    maintainer_splits=line_allocations[line.upstream_key]["maintainers"],
                 ))
             db.flush()
             append_ledger_event(
@@ -308,8 +522,8 @@ class PlanService:
                 "PLAN_CREATED",
                 {
                     "budget_cents": budget_cents,
-                    "payable_total_cents": result.payable_total_cents,
-                    "reserved_total_cents": result.reserved_total_cents,
+                    "payable_total_cents": payable_total_cents,
+                    "reserved_total_cents": reserved_total_cents,
                     "line_count": len(lines),
                 },
                 plan_id=plan.id,
@@ -356,11 +570,18 @@ class PlanService:
             raise AllocationError("session has no eligible upstream projects")
         policy = load_allocation_policy(policy_path) if policy_path is not None else load_allocation_policy()
         result = allocate(list(inputs.projects), budget_cents, policy, inputs.evaluation_date)
+        line_allocations = PlanService._score_maintainers(result.lines, inputs)
+        payable_total_cents = sum(row["payable_cents"] for row in line_allocations.values())
+        reserved_total_cents = sum(row["reserved_cents"] for row in line_allocations.values())
         estimates = PlanService._fee_calculation(
-            result.payable_total_cents,
-            sum(line.payable_cents > 0 for line in result.lines),
+            payable_total_cents,
+            sum(len(row["maintainers"]) for row in line_allocations.values()),
             policy.fees,
         )
+        proposal = PlanService._approval_proposal(
+            result.lines, line_allocations, inputs, policy.fees.version,
+        )
+        fee_snapshot = {**estimates, "approval_proposal": freeze_proposal(proposal)}
         lines = sorted(result.lines, key=lambda line: line.upstream_key)
 
         connection = db.connection()
@@ -379,13 +600,13 @@ class PlanService:
                 )
                 .values(
                     budget_cents=budget_cents,
-                    payable_total_cents=result.payable_total_cents,
-                    reserved_total_cents=result.reserved_total_cents,
+                    payable_total_cents=payable_total_cents,
+                    reserved_total_cents=reserved_total_cents,
                     est_payout_fees_cents=estimates["estimated_payout_fee_cents"],
                     est_incoming_fee_cents=estimates["estimated_incoming_fee_cents"],
                     charge_cents=estimates["gross_charge_cents"],
                     fee_policy_version=policy.fees.version,
-                    fee_policy_snapshot=estimates,
+                    fee_policy_snapshot=fee_snapshot,
                 )
                 .execution_options(synchronize_session="fetch")
             )
@@ -415,10 +636,11 @@ class PlanService:
                     display_name=line.display_name,
                     weight=line.weight,
                     amount_cents=line.amount_cents,
-                    payable_cents=line.payable_cents,
-                    reserved_cents=line.reserved_cents,
+                    payable_cents=line_allocations[line.upstream_key]["payable_cents"],
+                    reserved_cents=line_allocations[line.upstream_key]["reserved_cents"],
                     reason=line.reason,
                     facts_snapshot=line.facts_snapshot.to_dict(),
+                    maintainer_splits=line_allocations[line.upstream_key]["maintainers"],
                 ))
             db.flush()
             append_ledger_event(
@@ -492,6 +714,7 @@ class PlanService:
         LLD. Use a clean, dedicated session so caller-owned work is untouched.
         """
         plan = PlanService.get(db, plan_id)
+        PlanService.verify_approval_proposal(db, plan)
         if plan.state == "funding" and plan.frozen_at is not None and plan.order_attempt == 1:
             return plan
         if plan.state != "draft" or plan.frozen_at is not None:
@@ -512,6 +735,7 @@ class PlanService:
         )
         try:
             current = PlanService.get(transition_db, plan_id)
+            approval_hash = PlanService.verify_approval_proposal(transition_db, current)
             if current.state == "funding" and current.frozen_at is not None and current.order_attempt == 1:
                 pass  # Another identical request already committed approval.
             elif current.state != "draft" or current.frozen_at is not None:
@@ -533,6 +757,7 @@ class PlanService:
                     {
                         "charge_cents": current.charge_cents,
                         "order_attempt": 1,
+                        "approval_snapshot_sha256": approval_hash,
                     },
                 )
         finally:

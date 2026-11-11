@@ -1,0 +1,8 @@
+schema: 1
+mapping_label: "SYNTHETIC DEMO MAPPING ONLY; this is not a verified identity claim"
+repository_key: github.com/curl/curl
+identities:
+  - github_user_id: 177011
+    maintainer_upstream_key: github.com/curl/curl
+  - github_user_id: 1969657
+    maintainer_upstream_key: github.com/curl/curl

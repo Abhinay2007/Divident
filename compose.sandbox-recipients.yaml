@@ -1,0 +1,11 @@
+services:
+  dividend:
+    environment:
+      DEMO_SANDBOX_RECIPIENTS_FILE: /run/demo-sandbox-recipients.yaml
+    volumes:
+      - type: bind
+        source: ${DEMO_SANDBOX_RECIPIENTS_HOST_PATH:?Set to the user-provided recipient YAML file}
+        target: /run/demo-sandbox-recipients.yaml
+        read_only: true
+        bind:
+          create_host_path: false

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { approvePlan, capturePlan, getPlan, ApiError } from './api'
+import { paypalReturnState } from './planAccess.js'
 
 function money(cents: number | null) {
   return cents === null ? 'Unknown' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -18,10 +19,15 @@ export default function FundScreen({ planId }: { planId: string }) {
   })
 
   if (plan.isPending) return <section className="discovery-page"><a className="back-link" href="/">← Overview</a><div className="discovery-heading"><div className="eyebrow">FUNDING</div><h1>Loading funding status…</h1></div><div className="skeleton session-skeleton"/></section>
-  if (plan.isError) return <section className="discovery-page"><a className="back-link" href="/">← Overview</a><div className="discovery-heading"><div className="eyebrow">FUNDING</div><h1>Plan unavailable</h1></div><PaymentError error={plan.error} retry={() => { void plan.refetch() }}/></section>
+  if (plan.isError) {
+    const missingAccess = plan.error instanceof ApiError && plan.error.code === 'plan_auth_required'
+    return <section className="discovery-page"><a className="back-link" href="/">← Overview</a><div className="discovery-heading"><div className="eyebrow">FUNDING</div><h1>Plan unavailable</h1></div><PaymentError error={plan.error} retry={missingAccess ? undefined : () => { void plan.refetch() }}/></section>
+  }
 
   const record = plan.data
-  const returnedFromPayPal = new URLSearchParams(window.location.search).get('paypal') === 'return'
+  const paypalState = paypalReturnState(window.location.search)
+  const returnedFromPayPal = paypalState === 'return'
+  const cancelledAtPayPal = paypalState === 'cancel'
   const uncertain = record.state === 'funding' && !record.order_id
   const approvalUnavailable = record.charge_cents === null || record.est_payout_fees_cents === null
   const approval = approve.data
@@ -44,11 +50,11 @@ export default function FundScreen({ planId }: { planId: string }) {
     </section>
 
     <section className="continue-panel approval-panel funding-action-panel" aria-labelledby="funding-action-title">
-      <div className="continue-copy"><span className="section-kicker">PAYMENT ACTION</span><h2 id="funding-action-title">{record.state === 'draft' ? 'Review approval eligibility' : 'Current payment status'}</h2><p>{actionDescription(record.state, uncertain, returnedFromPayPal, record.order_id)}</p></div>
+      <div className="continue-copy"><span className="section-kicker">PAYMENT ACTION</span><h2 id="funding-action-title">{record.state === 'draft' ? 'Review approval eligibility' : 'Current payment status'}</h2><p>{actionDescription(record.state, uncertain, returnedFromPayPal, cancelledAtPayPal, record.order_id)}</p></div>
       <div className="approval-actions">
         {record.state === 'draft' && <button className="button button-primary" type="button" disabled={approve.isPending || approvalUnavailable} title={approvalUnavailable ? 'Approval requires measured payment fee inputs.' : undefined} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking fee inputs…' : approvalUnavailable ? 'Approval unavailable · fees unmeasured' : 'Create PayPal order'}</button>}
-        {record.state === 'funding' && record.order_id && !returnedFromPayPal && <button className="button button-secondary" type="button" disabled={approve.isPending} onClick={() => approve.mutate()}>{approve.isPending ? 'Retrieving approval link…' : 'Retrieve existing PayPal approval link'}</button>}
-        {approval && <a className="button button-secondary" href={approval.approval_url} target="_blank" rel="noreferrer">Continue to PayPal Sandbox ↗</a>}
+        {record.state === 'funding' && record.order_id && !returnedFromPayPal && <button className="button button-secondary" type="button" disabled={approve.isPending} onClick={() => approve.mutate()}>{approve.isPending ? 'Retrieving approval link…' : cancelledAtPayPal ? 'Reopen PayPal approval' : 'Retrieve existing PayPal approval link'}</button>}
+        {approval && <a className="button button-secondary" href={approval.approval_url}>Continue to PayPal Sandbox ↗</a>}
         {record.state === 'funding' && record.order_id && returnedFromPayPal && <button className="button button-primary" type="button" disabled={capture.isPending} onClick={() => {
           if (window.confirm(`Capture the approved PayPal order for ${money(record.charge_cents)}?`)) capture.mutate()
         }}>{capture.isPending ? 'Confirming capture…' : 'Confirm and capture funds'}</button>}
@@ -89,9 +95,10 @@ function summary(state: string, uncertain: boolean, orderId: string | null, gros
   if (state === 'failed') return 'The backend marked this funding attempt failed.'
   return `Backend plan state: ${label(state)}.`
 }
-function actionDescription(state: string, uncertain: boolean, returned: boolean, orderId: string | null) {
+function actionDescription(state: string, uncertain: boolean, returned: boolean, cancelled: boolean, orderId: string | null) {
   if (uncertain) return 'The order request may have reached the provider. Only check status; do not create another order.'
   if (state === 'draft') return 'Approval creates an order only when measured fee inputs are available. It does not capture funds.'
+  if (state === 'funding' && orderId && cancelled) return 'PayPal approval was canceled. No funds were captured; you can reopen the existing approval.'
   if (state === 'funding' && orderId && returned) return 'PayPal returned to this plan. Review the amount, then explicitly confirm capture.'
   if (state === 'funding' && orderId && !returned) return 'An order is recorded. Retrieve its PayPal approval link or return from PayPal to continue.'
   if (state === 'funding' && orderId) return 'PayPal returned to this plan. Review the amount, then explicitly confirm capture.'

@@ -147,7 +147,7 @@ def test_get_projects_uses_maintainer_opt_in_and_does_not_guess_no_upstream(db_f
         db.add(project)
         db.add(Maintainer(
             upstream_key="owner/repo", display_name="Maintainer",
-            email="maintainer@example.test", opted_in=True,
+                email="maintainer@example.test", opted_in=True, market_code="US",
         ))
         db.flush()
         result = SessionService.get_projects(db, session_id)

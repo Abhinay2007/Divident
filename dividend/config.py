@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     ENRICH_MODE: Literal["fixtures", "live"] = "fixtures"
     GITHUB_TOKEN: str | None = Field(default=None, repr=False)
+    GITHUB_OAUTH_CLIENT_ID: str | None = None
+    GITHUB_OAUTH_CLIENT_SECRET: str | None = Field(default=None, repr=False)
     UDD_DSN: str | None = Field(default=None, repr=False)
 
     allocation_policy_path: Path = Field(default=DEFAULT_POLICY_PATH, exclude=True, repr=False)
@@ -63,6 +65,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_mode_credentials(self):
+        if bool(self.GITHUB_OAUTH_CLIENT_ID) != bool(self.GITHUB_OAUTH_CLIENT_SECRET):
+            raise ValueError("GitHub maintainer claims require both GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET")
         if self.PAYMENTS_MODE == "paypal":
             missing = [name for name, value in (
                 ("PAYPAL_CLIENT_ID", self.PAYPAL_CLIENT_ID),

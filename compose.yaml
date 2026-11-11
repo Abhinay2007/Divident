@@ -12,13 +12,15 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
       DATABASE_URL: sqlite:////data/dividend.db
       DEMO_SEED_ON_BOOT: ${DEMO_SEED_ON_BOOT:-true}
-      PAYMENTS_MODE: ${PAYMENTS_MODE:-fake}
+      PAYMENTS_MODE: paypal
       PAYPAL_ENV: sandbox
-      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
-      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID:?Set PAYPAL_CLIENT_ID in the ignored .env file}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET:?Set PAYPAL_CLIENT_SECRET in the ignored .env file}
       ENRICH_MODE: ${ENRICH_MODE:-fixtures}
       UDD_DSN: ${UDD_DSN:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
       LLM_PROVIDER: groq
       LLM_LIVE_ENABLED: "false"
       LLM_KILL_SWITCH: "true"

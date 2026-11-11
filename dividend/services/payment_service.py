@@ -11,8 +11,8 @@ from ..allocation.policy import load_allocation_policy
 from ..errors import (InvariantViolation, NotFoundError, PaymentProviderError,
                       StateError, ValidationError)
 from ..ledger import append as append_ledger_event
-from ..models import (LedgerEvent, Maintainer, PaymentOperation, PayoutBatch,
-                      PayoutItem, Plan, PlanLine)
+from ..models import (LedgerEvent, Maintainer, MaintainerRecipient,
+                      PaymentOperation, PayoutBatch, PayoutItem, Plan, PlanLine)
 from ..schemas import (ApproveResponse, BatchResponse, CaptureDetail,
                        CaptureResponse, ItemResponse, PayoutResponse,
                        PayoutsResponse)
@@ -22,6 +22,16 @@ from ..payments.reconcile import map_batch_status, map_item_status
 from .plan_service import PlanService
 
 _EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+# Explicit compatibility scope for the three pre-snapshot Sandbox payout records.
+_LEGACY_PAYOUTS = {
+    "0619cc2d-8b5c-4a90-b709-0ebe07acb7f8": (
+        "SWFXHXW893NQY", "p0619cc2d-a1-000", "BQ3NESV9D4BS6", 750, "settled"),
+    "2f313a2f-f738-476f-9af2-9e2f970b8918": (
+        "F27CU8WP649RA", "p2f313a2f-a1-000", "FMAPC8HZCXVCY", 1200, "settled"),
+    "cf86a05d-f5a6-43ea-ad7f-ca6936dc0219": (
+        "VD4E4K8Q7SWM4", "pcf86a05d-a1-000", "K9JXFBAHPXXCS", 750, "paying"),
+}
 
 
 def _new_session(db: DbSession) -> DbSession:
@@ -79,6 +89,25 @@ def _available_funds_cents(tx: DbSession) -> int:
     return captured - failed_plan_reserve - spent - reserved - fees
 
 
+def _recipient_by_id(tx: DbSession, maintainer_id: str):
+    recipient = tx.get(MaintainerRecipient, maintainer_id)
+    if recipient is not None:
+        return recipient
+    return tx.get(Maintainer, maintainer_id)
+
+
+def _eligible_recipient(recipient, upstream_key: str) -> bool:
+    return bool(
+        recipient is not None
+        and recipient.upstream_key == upstream_key
+        and recipient.opted_in is True
+        and recipient.active is True
+        and recipient.market_code == "US"
+        and isinstance(recipient.email, str)
+        and _EMAIL.fullmatch(recipient.email)
+    )
+
+
 class PaymentService:
     def __init__(self, provider: PaymentsProvider, public_base_url: str,
                  allocation_policy_path=None):
@@ -89,6 +118,7 @@ class PaymentService:
     def approve_and_fund(self, plan_id: str, db: DbSession) -> ApproveResponse:
         with _new_session(db) as tx:
             plan = PlanService.get(tx, plan_id)
+            PlanService.verify_approval_proposal(tx, plan)
             if plan.state == "cancelled":
                 raise StateError("Cancelled plan has no active approval link", code="plan_cancelled",
                                  current_state=plan.state, allowed_transitions=[])
@@ -141,6 +171,7 @@ class PaymentService:
     def capture(self, plan_id: str, db: DbSession) -> CaptureResponse:
         with _new_session(db) as tx:
             plan = PlanService.get(tx, plan_id)
+            PlanService.verify_approval_proposal(tx, plan)
             if plan.state == "funded" and plan.capture_gross_cents is not None:
                 event = tx.scalar(select(LedgerEvent).where(
                     LedgerEvent.plan_id == plan_id, LedgerEvent.type == "ORDER_CAPTURED"
@@ -445,6 +476,7 @@ class PaymentService:
         with _new_session(db) as tx:
             _begin_immediate(tx)
             plan = PlanService.get(tx, plan_id)
+            PlanService.verify_approval_proposal(tx, plan)
             self._require_measured_policy()
             snapshot = plan.fee_policy_snapshot
             assumptions = snapshot.get("assumptions", {}) if isinstance(snapshot, dict) else {}
@@ -488,6 +520,7 @@ class PaymentService:
                 lines = list(tx.scalars(select(PlanLine).where(
                     PlanLine.plan_id == plan_id, PlanLine.payable_cents > 0
                 ).order_by(PlanLine.upstream_key)))
+                line_by_key = {line.upstream_key: line for line in lines}
                 if retry:
                     if latest is None or not latest.external_id:
                         raise StateError("A confirmed prior payout batch is required for retry",
@@ -499,29 +532,100 @@ class PaymentService:
                         raise StateError("A pending or unknown payout must be reconciled before retry",
                                          code="payout_outcome_unresolved", current_state=plan.state,
                                          allowed_transitions=[])
-                    failed = {item.upstream_key: item for item in tx.scalars(select(PayoutItem).where(
-                        PayoutItem.batch_id == latest.id, PayoutItem.status == "failed"))}
-                    lines = [line for line in lines if line.upstream_key in failed]
-                    if any(failed[line.upstream_key].amount_cents != line.payable_cents for line in lines):
-                        raise InvariantViolation("Failed payout amount no longer matches the frozen plan",
-                                                 code="payout_item_mismatch")
-                if not lines:
+                    failed_items = list(tx.scalars(select(PayoutItem).where(
+                        PayoutItem.batch_id == latest.id, PayoutItem.status == "failed"
+                    ).order_by(PayoutItem.sender_item_id)))
+                    recipient_specs = []
+                    for item in failed_items:
+                        line = line_by_key.get(item.upstream_key)
+                        if line is None:
+                            raise InvariantViolation("Failed payout item has no matching plan line",
+                                                     code="payout_item_mismatch")
+                        splits = line.maintainer_splits or []
+                        split = next((row for row in splits
+                                      if isinstance(row, dict)
+                                      and row.get("maintainer_id") == item.maintainer_id), None)
+                        if item.maintainer_id is None:
+                            legacy = tx.scalar(select(Maintainer).where(
+                                Maintainer.upstream_key == item.upstream_key,
+                            ))
+                            if legacy is not None and (not splits or any(
+                                row.get("maintainer_id") == legacy.id for row in splits
+                            )):
+                                split = {"maintainer_id": legacy.id,
+                                         "amount_cents": line.payable_cents}
+                        elif split is None:
+                            legacy = tx.get(Maintainer, item.maintainer_id)
+                            if (legacy is not None and legacy.upstream_key == item.upstream_key
+                                    and item.amount_cents == line.payable_cents):
+                                split = {"maintainer_id": legacy.id,
+                                         "amount_cents": line.payable_cents}
+                        if (split is None or split.get("amount_cents") != item.amount_cents
+                                or item.maintainer_id not in (None, split.get("maintainer_id"))):
+                            raise InvariantViolation("Failed payout amount no longer matches the frozen recipient split",
+                                                     code="payout_item_mismatch")
+                        recipient = _recipient_by_id(tx, split["maintainer_id"])
+                        if not _eligible_recipient(recipient, item.upstream_key):
+                            raise InvariantViolation("Failed payout recipient is no longer eligible",
+                                                     code="invalid_payout_recipient")
+                        recipient_specs.append({
+                            "upstream_key": item.upstream_key,
+                            "maintainer_id": split["maintainer_id"],
+                            "display_name": recipient.display_name,
+                            "email": recipient.email,
+                            "amount_cents": item.amount_cents,
+                            "share_bps": split.get("share_bps", 10000),
+                        })
+                else:
+                    recipient_specs = []
+                    for line in lines:
+                        splits = line.maintainer_splits
+                        if splits is None:
+                            # Pre-upgrade/manual legacy lines used one project recipient.
+                            legacy = tx.scalar(select(Maintainer).where(
+                                Maintainer.upstream_key == line.upstream_key,
+                            ))
+                            splits = ([{"maintainer_id": legacy.id,
+                                       "display_name": legacy.display_name,
+                                       "share_bps": 10000,
+                                       "amount_cents": line.payable_cents}]
+                                      if legacy is not None and _eligible_recipient(legacy, line.upstream_key)
+                                      else [])
+                        if (not isinstance(splits, list) or not splits
+                                or any(not isinstance(row, dict) for row in splits)
+                                or sum(row.get("amount_cents", 0) for row in splits) != line.payable_cents
+                                or sum(row.get("share_bps", 0) for row in splits) != 10000):
+                            raise InvariantViolation("Payable allocation has no valid frozen recipient split",
+                                                     code="invalid_payout_recipient")
+                        seen_ids = set()
+                        for split in splits:
+                            if (not isinstance(split, dict)
+                                    or type(split.get("amount_cents")) is not int
+                                    or split["amount_cents"] <= 0
+                                    or type(split.get("share_bps")) is not int
+                                    or split["maintainer_id"] in seen_ids):
+                                raise InvariantViolation("Frozen recipient split is invalid",
+                                                         code="invalid_payout_recipient")
+                            seen_ids.add(split["maintainer_id"])
+                            recipient = _recipient_by_id(tx, split["maintainer_id"])
+                            if not _eligible_recipient(recipient, line.upstream_key):
+                                raise InvariantViolation("Payable allocation has no eligible recipient",
+                                                         code="invalid_payout_recipient")
+                            recipient_specs.append({
+                                "upstream_key": line.upstream_key,
+                                "maintainer_id": split["maintainer_id"],
+                                "display_name": recipient.display_name,
+                                "email": recipient.email,
+                                "amount_cents": split["amount_cents"],
+                                "share_bps": split["share_bps"],
+                            })
+                if not recipient_specs:
                     raise StateError("Plan has no eligible failed payout allocations" if retry else "Plan has no payable allocations",
                                      code="no_failed_payout_items" if retry else "no_payable_allocations",
                                      current_state=plan.state, allowed_transitions=[])
-                payees = {row.upstream_key: row for row in tx.scalars(select(Maintainer).where(
-                    Maintainer.upstream_key.in_([line.upstream_key for line in lines]),
-                    Maintainer.opted_in.is_(True),
-                    Maintainer.market_code == "US",
-                ))}
-                for line in lines:
-                    payee = payees.get(line.upstream_key)
-                    if payee is None or not _EMAIL.fullmatch(payee.email):
-                        raise InvariantViolation("Payable allocation has no valid opted-in US recipient",
-                                                 code="invalid_payout_recipient")
                 available = _available_funds_cents(tx)
-                payout_fee_estimate = assumptions["payout_fee_per_item_cents"] * len(lines)
-                required = sum(line.payable_cents for line in lines) + payout_fee_estimate
+                payout_fee_estimate = assumptions["payout_fee_per_item_cents"] * len(recipient_specs)
+                required = sum(item["amount_cents"] for item in recipient_specs) + payout_fee_estimate
                 if available < required:
                     raise StateError("Tracked available funds do not cover payout items and estimated fees",
                                      code="insufficient_available_funds", current_state=plan.state,
@@ -534,15 +638,23 @@ class PaymentService:
                 tx.add(batch)
                 tx.flush()
                 items = []
-                for index, line in enumerate(lines):
+                for index, spec in enumerate(recipient_specs):
                     item = PayoutItem(
-                        batch_id=batch.id, plan_id=plan_id, upstream_key=line.upstream_key,
+                        batch_id=batch.id, plan_id=plan_id, upstream_key=spec["upstream_key"],
+                        maintainer_id=spec["maintainer_id"],
                         sender_item_id=f"p{plan_id[:8]}-a{attempt}-{index:03d}",
-                        recipient_email=payees[line.upstream_key].email,
-                        amount_cents=line.payable_cents, status="pending",
+                        recipient_email=spec["email"],
+                        amount_cents=spec["amount_cents"], status="pending",
                     )
                     tx.add(item)
                     items.append(item)
+                    append_ledger_event(tx, "PAYOUT_ITEM_INTENT", {
+                        "sender_item_id": item.sender_item_id,
+                        "maintainer_id": spec["maintainer_id"],
+                        "upstream_key": spec["upstream_key"],
+                        "share_bps": spec["share_bps"],
+                        "amount_cents": spec["amount_cents"],
+                    }, plan_id=plan_id, external_id=item.sender_item_id)
                 plan.payout_attempt = attempt
                 operation = PaymentOperation(
                     plan_id=plan_id, kind="payout", attempt=attempt, state="intent",
@@ -556,7 +668,7 @@ class PaymentService:
                 }, plan_id=plan_id, external_id=sender_batch_id)
                 PlanService.transition(tx, plan_id, expected_state, "paying", "PAYOUT_INTENT", {
                     "attempt": attempt, "sender_batch_id": sender_batch_id,
-                    "item_count": len(items),
+                    "item_count": len(items), "recipient_count": len(items),
                 }, additional_events=[])
                 # transition() committed the intent and all items atomically.
                 batch = tx.get(PayoutBatch, batch.id)
@@ -677,6 +789,12 @@ class PaymentService:
     def reconcile(self, plan_id: str, db: DbSession) -> PayoutsResponse:
         with _new_session(db) as tx:
             plan = PlanService.get(tx, plan_id)
+            legacy = _LEGACY_PAYOUTS.get(plan_id)
+            snapshot = plan.fee_policy_snapshot
+            if (legacy is None or type(snapshot) is not dict
+                    or "approval_proposal" in snapshot):
+                PlanService.verify_approval_proposal(tx, plan)
+                legacy = None
             if plan.state not in {"paying", "settled_with_exceptions", "settled"}:
                 raise StateError("Plan has no payouts to reconcile", code="invalid_plan_transition",
                                  current_state=plan.state, allowed_transitions=["paying", "settled_with_exceptions", "settled"])
@@ -685,6 +803,8 @@ class PaymentService:
             if batch is None:
                 raise StateError("Payout provider batch is not yet known", code="payout_batch_unknown",
                                  current_state=plan.state, allowed_transitions=[])
+            if legacy is not None:
+                self._verify_legacy_payout_intent(tx, plan, batch, legacy)
             if batch.external_id is None:
                 batch.status = "needs_attention"
                 tx.commit()
@@ -697,6 +817,9 @@ class PaymentService:
             raise _provider_failure(exc) from exc
         if not isinstance(detail, BatchDetail) or detail.batch_id != batch_id:
             raise PaymentProviderError("Provider returned invalid payout detail", code="invalid_payout_response")
+        if legacy is not None:
+            self._reconcile_legacy_payout(plan_id, attempt, legacy, detail, db)
+            return self.get_payouts(plan_id, db)
         with _new_session(db) as tx:
             _begin_immediate(tx)
             plan = PlanService.get(tx, plan_id)
@@ -759,6 +882,85 @@ class PaymentService:
         return self.get_payouts(plan_id, db)
 
     @staticmethod
+    def _verify_legacy_payout_intent(tx, plan, batch, expected) -> PayoutItem:
+        batch_id, sender_item_id, external_item_id, amount_cents, original_state = expected
+        snapshot = plan.fee_policy_snapshot
+        batches = list(tx.scalars(select(PayoutBatch).where(PayoutBatch.plan_id == plan.id)))
+        operation = tx.scalar(select(PaymentOperation).where(
+            PaymentOperation.plan_id == plan.id, PaymentOperation.kind == "payout",
+            PaymentOperation.attempt == 1))
+        items = list(tx.scalars(select(PayoutItem).where(PayoutItem.plan_id == plan.id)))
+        valid_item_states = {"success"} if original_state == "settled" else {"pending", "success"}
+        if (type(snapshot) is not dict or "approval_proposal" in snapshot
+                or plan.payout_attempt != 1 or plan.state not in {original_state, "settled"}
+                or len(batches) != 1 or batches[0].id != batch.id
+                or batch.plan_id != plan.id or batch.attempt != 1
+                or batch.sender_batch_id != f"plan_{plan.id}_payout_1"
+                or batch.external_id != batch_id or len(items) != 1
+                or items[0].batch_id != batch.id
+                or items[0].sender_item_id != sender_item_id
+                or items[0].external_id != external_item_id
+                or items[0].amount_cents != amount_cents
+                or items[0].status not in valid_item_states
+                or batch.status not in {"pending", "success"}
+                or operation is None or operation.state != "confirmed"
+                or operation.external_id != batch_id or operation.payout_batch_id != batch.id
+                or operation.request_id != f"plan:{plan.id}:payout:1"):
+            raise PaymentProviderError("Legacy payout records do not match the approved compatibility scope",
+                                       code="legacy_payout_mismatch")
+        return items[0]
+
+    def _reconcile_legacy_payout(self, plan_id: str, attempt: int, expected,
+                                 detail: BatchDetail, db: DbSession) -> None:
+        batch_id, sender_item_id, external_item_id, amount_cents, _original_state = expected
+        if (detail.batch_id != batch_id or map_batch_status(detail.status) != "success"
+                or len(detail.items) != 1):
+            raise PaymentProviderError("Fresh provider payout status does not match the legacy intent",
+                                       code="legacy_payout_mismatch")
+        reported = detail.items[0]
+        if (reported.sender_item_id != sender_item_id or reported.external_id != external_item_id
+                or reported.amount_cents != amount_cents or reported.currency != "USD"
+                or map_item_status(reported.raw_status) != "success"
+                or type(detail.fees_cents) is not int or detail.fees_cents < 0):
+            raise PaymentProviderError("Fresh provider payout item does not match the legacy intent",
+                                       code="legacy_payout_mismatch")
+
+        with _new_session(db) as tx:
+            _begin_immediate(tx)
+            plan = PlanService.get(tx, plan_id)
+            batch = tx.scalar(select(PayoutBatch).where(
+                PayoutBatch.plan_id == plan_id, PayoutBatch.attempt == attempt))
+            if batch is None:
+                raise PaymentProviderError("Legacy payout batch disappeared during reconciliation",
+                                           code="legacy_payout_mismatch")
+            item = self._verify_legacy_payout_intent(tx, plan, batch, expected)
+            if batch.fees_cents is not None and batch.fees_cents != detail.fees_cents:
+                raise PaymentProviderError("Fresh provider fee does not match the stored legacy payout fee",
+                                           code="legacy_payout_mismatch")
+            batch.status = "success"
+            if batch.fees_cents is None:
+                batch.fees_cents = detail.fees_cents
+                append_ledger_event(tx, "PAYOUT_FEE_ACTUALIZED", {
+                    "estimated_cents": batch.estimated_fees_cents,
+                    "actual_cents": detail.fees_cents,
+                }, plan_id=plan_id, external_id=batch_id)
+            if item.status != "success":
+                item.status = "success"
+                item.external_id = external_item_id
+                item.failure_reason = None
+                item.updated_at = datetime.now(UTC)
+                append_ledger_event(tx, "PAYOUT_ITEM_SUCCESS", {
+                    "sender_item_id": item.sender_item_id,
+                    "upstream_key": item.upstream_key,
+                    "amount_cents": item.amount_cents,
+                }, plan_id=plan_id, external_id=external_item_id)
+            if plan.state == "paying":
+                PlanService.transition(tx, plan_id, "paying", "settled", "PLAN_SETTLED",
+                                       {"exceptions": False})
+            else:
+                tx.commit()
+
+    @staticmethod
     def _batch_status(plan_id: str, attempt: int, db: DbSession) -> str:
         with _new_session(db) as tx:
             batch = tx.scalar(select(PayoutBatch).where(
@@ -776,9 +978,20 @@ class PaymentService:
             batches = list(tx.scalars(select(PayoutBatch).where(PayoutBatch.plan_id == plan_id)
                                       .order_by(PayoutBatch.attempt)))
             responses = []
-            maintainers = {row.upstream_key: row.display_name for row in tx.scalars(select(Maintainer).where(
-                Maintainer.upstream_key.in_({item.upstream_key for batch in batches for item in batch.items})
-            ))} if batches else {}
+            all_items = [item for batch in batches for item in tx.scalars(
+                select(PayoutItem).where(PayoutItem.batch_id == batch.id)
+            )]
+            keys = {item.upstream_key for item in all_items}
+            recipient_ids = {item.maintainer_id for item in all_items if item.maintainer_id}
+            legacy_by_key = {row.upstream_key: row.display_name for row in tx.scalars(
+                select(Maintainer).where(Maintainer.upstream_key.in_(keys))
+            )} if keys else {}
+            display_by_id = {row.id: row.display_name for row in tx.scalars(
+                select(MaintainerRecipient).where(MaintainerRecipient.id.in_(recipient_ids))
+            )} if recipient_ids else {}
+            display_by_id.update({row.id: row.display_name for row in tx.scalars(
+                select(Maintainer).where(Maintainer.id.in_(recipient_ids))
+            )} if recipient_ids else {})
             for batch in batches:
                 items = list(tx.scalars(select(PayoutItem).where(PayoutItem.batch_id == batch.id)
                                         .order_by(PayoutItem.sender_item_id)))
@@ -787,7 +1000,11 @@ class PaymentService:
                     status=batch.status, fees_cents=batch.fees_cents,
                     items=[ItemResponse(sender_item_id=item.sender_item_id,
                                         upstream_key=item.upstream_key,
-                                        recipient_display=maintainers.get(item.upstream_key, item.upstream_key),
+                                        maintainer_id=item.maintainer_id,
+                                        recipient_display=display_by_id.get(
+                                            item.maintainer_id,
+                                            legacy_by_key.get(item.upstream_key, item.upstream_key),
+                                        ),
                                         amount_cents=item.amount_cents,
                                         status=item.status, failure_reason=item.failure_reason,
                                         updated_at=item.updated_at)
@@ -799,6 +1016,7 @@ class PaymentService:
         with _new_session(db) as tx:
             _begin_immediate(tx)
             plan = PlanService.get(tx, plan_id)
+            PlanService.verify_approval_proposal(tx, plan)
             if plan.state not in {"draft", "funding"} or plan.capture_gross_cents is not None:
                 raise StateError("Plan cannot be cancelled", code="invalid_plan_transition",
                                  current_state=plan.state, allowed_transitions=["cancelled"])

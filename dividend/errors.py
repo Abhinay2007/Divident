@@ -59,7 +59,10 @@ class EnrichmentError(DividendError):
 
 
 class RateLimitExceeded(DividendError):
-    pass
+    def __init__(self, message: str = "Rate limit exceeded", *, code: str,
+                 retry_after_seconds: float | None = None, detail: dict | None = None):
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message, code=code, detail=detail)
 
 
 class LLMDisabled(DividendError):

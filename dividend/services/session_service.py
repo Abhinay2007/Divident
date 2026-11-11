@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session as DbSession
 from ..errors import NotFoundError, StateError, ValidationError
 from ..llm.limits import LiveResolutionLimits, SessionLimitedProvider
 from ..ledger import append as append_ledger_event
-from ..models import LLMCache, Maintainer, Session, SourceResolution, UpstreamProject
+from ..models import (LLMCache, Maintainer, MaintainerRecipient, Session,
+                      SourceResolution, UpstreamProject)
 from ..allocation.snapshot import source_facts_payload
 from ..enrichment.base import Enricher, FactSet, GitHubFacts
 from ..upstream.mapper import map_source
@@ -25,6 +26,7 @@ from ..schemas import ProjectsResponse, ProjectResponse, SessionCreateRequest, S
 
 
 _PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.\-]*$")
+_RECIPIENT_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _DEMO_FIXTURE = Path(__file__).resolve().parents[1] / "data" / "demo_dpkg.tsv"
 _logger = logging.getLogger(__name__)
 
@@ -259,12 +261,15 @@ class SessionService:
             .where(UpstreamProject.session_id == session_id)
             .order_by(UpstreamProject.upstream_key)
         ))
-        maintainer_rows = db.execute(
-            select(Maintainer.upstream_key, Maintainer.display_name, Maintainer.opted_in).where(
-                Maintainer.upstream_key.in_([project.upstream_key for project in projects])
-            )
-        ).all() if projects else []
-        maintainers = {key: (name, opted_in) for key, name, opted_in in maintainer_rows}
+        project_keys = [project.upstream_key for project in projects]
+        legacy_rows = list(db.scalars(select(Maintainer).where(Maintainer.upstream_key.in_(project_keys)))) if projects else []
+        recipient_rows = list(db.scalars(select(MaintainerRecipient).where(
+            MaintainerRecipient.upstream_key.in_(project_keys)
+        ))) if projects else []
+        legacy_by_key = {row.upstream_key: row for row in legacy_rows}
+        recipients_by_key: dict[str, list[MaintainerRecipient]] = {}
+        for row in recipient_rows:
+            recipients_by_key.setdefault(row.upstream_key, []).append(row)
         resolutions = list(db.scalars(
             select(SourceResolution)
             .where(SourceResolution.session_id == session_id)
@@ -304,8 +309,16 @@ class SessionService:
         ]
         responses = []
         for project in projects:
-            maintainer = maintainers.get(project.upstream_key)
-            is_payable = maintainer is not None and maintainer[1] is True
+            recipients = recipients_by_key.get(project.upstream_key)
+            candidates = recipients if recipients is not None else (
+                [legacy_by_key[project.upstream_key]] if project.upstream_key in legacy_by_key else []
+            )
+            is_payable = any(
+                row.opted_in is True and row.active is True
+                and row.market_code == "US" and _RECIPIENT_EMAIL.fullmatch(row.email)
+                for row in candidates
+            )
+            maintainer_names = ", ".join(row.display_name for row in candidates) or None
             responses.append(ProjectResponse(
                 upstream_key=project.upstream_key,
                 display_name=project.display_name,
@@ -322,7 +335,7 @@ class SessionService:
                     if is_payable
                     else "No opted-in maintainer is available"
                 ),
-                maintainer_name=maintainer[0] if maintainer else None,
+                maintainer_name=maintainer_names,
             ))
         return ProjectsResponse(projects=responses, unmapped=unmapped, no_upstream=no_upstream, sources=sources)
 

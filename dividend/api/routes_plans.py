@@ -7,7 +7,7 @@ from ..models import Plan
 from ..schemas import (
     ApproveResponse, CaptureResponse, MoneySummary, PlanBudgetPatchRequest,
     PlanCreateRequest, PlanLineResponse, PlanResponse, PayoutResponse,
-    PayoutsResponse, ExplanationsResponse,
+    PayoutsResponse, ExplanationsResponse, EvidenceReviewResponse,
 )
 from ..services import ExplanationService, PlanService
 from .deps import get_db, get_payment_service, plan_access_token, require_plan_access
@@ -27,6 +27,7 @@ def _plan_response(plan: Plan, action_token: str | None = None) -> PlanResponse:
             payability="payable" if line.payable_cents > 0 else "reserved",
             reason=line.reason,
             facts_snapshot=line.facts_snapshot,
+            maintainers=line.maintainer_splits or [],
         )
         for line in plan.lines
     ]
@@ -87,6 +88,14 @@ async def get_plan_explanations(
     _: None = Depends(require_plan_access),
 ):
     return ExplanationService.get_plan_explanations(db, plan_id, request.app.state.llm)
+
+
+@router.get("/plans/{plan_id}/evidence-review", response_model=EvidenceReviewResponse)
+async def get_plan_evidence_review(
+    plan_id: str, request: Request, db: DbSession = Depends(get_db),
+    _: None = Depends(require_plan_access),
+):
+    return request.app.state.evidence_review_service.review(plan_id, db)
 
 
 @router.patch("/plans/{plan_id}/budget", response_model=PlanResponse)

@@ -1,6 +1,8 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { ApiError, createDemoSession, createPlan, getProjects, getSession, type Project, type SourceDetail } from './api'
+import { ApiError, createDemoSession, createPlan, getPlan, getProjects, getSession, getWorkspace, type Project, type SourceDetail } from './api'
+import { planTokenKey } from './planAccess.js'
+import { continuePath } from './workspace.js'
 
 function ErrorMessage({ error, retry, message }: { error: Error; retry?: () => void; message?: string }) {
   const requestId = error instanceof ApiError ? error.requestId : undefined
@@ -28,6 +30,11 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
   const [budget, setBudget] = useState('')
   const [evaluationDate, setEvaluationDate] = useState(localToday)
   const [formError, setFormError] = useState('')
+  const workspace = useQuery({ queryKey: ['workspace'], queryFn: getWorkspace })
+  const currentPlans = workspace.data?.sessions.find((item) => item.id === sessionId)?.plans ?? []
+  const currentPlanQueries = useQueries({ queries: currentPlans.map(({ id }) => ({
+    queryKey: ['plan', id], queryFn: () => getPlan(id), retry: false,
+  })) })
   const start = useMutation({
     mutationFn: createDemoSession,
     onSuccess: ({ id }) => window.location.assign(`/discovery/${id}`),
@@ -47,7 +54,8 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
   const plan = useMutation({
     mutationFn: ({ cents, date }: { cents: number; date: string }) => createPlan(sessionId!, cents, date),
     onSuccess: ({ id, action_token }, values) => {
-      sessionStorage.setItem(`plan:${id}`, action_token)
+      localStorage.setItem(planTokenKey(id), action_token)
+      sessionStorage.setItem(planTokenKey(id), action_token)
       window.location.assign(`/allocation/${id}?evaluation_date=${encodeURIComponent(values.date)}`)
     },
   })
@@ -68,11 +76,14 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
       <a className="back-link" href="/">← Overview</a>
       <div className="discovery-heading"><div className="eyebrow">PACKAGE DISCOVERY</div><h1>Find the projects behind your packages.</h1><p>Start with the bundled Debian fixture. Dividend maps each binary package through its source package to an upstream project.</p></div>
       <section className="discovery-start" aria-labelledby="demo-title">
-        <div className="discovery-start-copy"><span className="section-kicker">DETERMINISTIC FIXTURE</span><h2 id="demo-title">Explore demo packages</h2><p>Creates a discovery session from the included package scan, then resolves it with the bundled enrichment fixtures.</p>
+        <div className="discovery-start-copy"><span className="section-kicker">START NEW SESSION</span><h2 id="demo-title">Explore demo packages</h2><p>Creates a new discovery session from the included package scan. Existing sessions below remain available to resume.</p>
           <button className="button button-primary" type="button" disabled={start.isPending} onClick={() => start.mutate()}><span>{start.isPending ? 'Creating session…' : 'Explore demo packages'}</span><span aria-hidden="true">→</span></button>
           {start.isError && <ErrorMessage error={start.error} retry={() => start.mutate()}/>}
         </div>
         <div className="discovery-start-note"><strong>What you’ll see</strong><p>Package membership, upstream mapping, and the method and outcome recorded for each source package.</p><a href="/">Return to overview</a></div>
+      </section>
+      <section className="workspace-discovery-list" aria-labelledby="saved-sessions-title"><div className="source-section-heading"><div><span className="section-kicker">PERSISTED WORK</span><h2 id="saved-sessions-title">Previous discovery sessions</h2></div><a className="text-link" href="/">Overview →</a></div>
+        {workspace.isPending ? <div className="skeleton table-skeleton" aria-label="Loading saved sessions"/> : workspace.isError ? <ErrorMessage error={workspace.error} retry={() => { void workspace.refetch() }}/> : workspace.data.sessions.length === 0 ? <div className="empty-state"><p>No previous sessions yet. Starting a discovery creates a new session; navigating away does not reset work.</p></div> : <div className="workspace-links">{workspace.data.sessions.map((item) => <a className="workspace-link" key={item.id} href={`/discovery/${item.id}`}><span><strong>{item.source_count.toLocaleString()} source packages</strong><small>{stateLabel(item.status)} · Updated {new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.last_updated_at))} · {item.plans.length} plan{item.plans.length === 1 ? '' : 's'}</small></span><span aria-hidden="true">→</span></a>)}</div>}
       </section>
     </section>
   }
@@ -105,6 +116,8 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
     </section>
 
     {projects.isError && <ErrorMessage error={projects.error} retry={() => { void projects.refetch() }}/>}
+    {currentPlans.length > 0 && <section className="continue-panel" aria-labelledby="saved-plan-title"><div className="continue-copy"><span className="section-kicker">EXISTING PLANS</span><h2 id="saved-plan-title">Resume a saved plan</h2><p>Continue opens the recorded plan and its payment history. It will not create another plan or PayPal order.</p></div><div className="workspace-links">{currentPlans.map((ref, index) => { const query = currentPlanQueries[index]; return query?.data ? <a className="workspace-link" key={ref.id} href={continuePath(query.data.state, ref.id)}><span><strong>Plan {ref.id.slice(0, 8)} · {stateLabel(query.data.state)}</strong><small>Last updated {new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ref.last_updated_at))}</small></span><span>Continue →</span></a> : <span className="workspace-link" key={ref.id}>{query?.error instanceof ApiError && query.error.code === 'plan_auth_required' ? 'Plan access unavailable in this browser.' : 'Loading saved plan…'}</span> })}</div></section>}
+
     <section className="source-section" aria-labelledby="source-table-title">
       <div className="source-section-heading"><div><span className="section-kicker">PACKAGE MAP</span><h2 id="source-table-title">Source packages &amp; upstream projects</h2></div><span className="row-count">{projects.isPending ? 'Loading' : `${sourceRows.length.toLocaleString()} sources`}</span></div>
       {projects.isPending ? <div className="skeleton table-skeleton" aria-label="Loading source package mappings"/> : sourceRows.length === 0 ? <div className="empty-state"><h3>No source package details returned</h3><p>The session has no source rows to display.</p></div> : <div className="table-scroll" role="region" aria-label="Source package mappings" tabIndex={0}><table className="source-table"><thead><tr><th scope="col">Source package</th><th scope="col">Binary packages</th><th scope="col">Upstream project</th><th scope="col">Resolution</th></tr></thead><tbody>{sourceRows.map((source) => <SourceRow key={source.source_name} source={source} project={source.upstream_key ? projectsByKey.get(source.upstream_key) : undefined}/>)}</tbody></table></div>}
@@ -113,7 +126,7 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
     {record.status === 'ready' && !projects.isPending && !projects.isError && <section className="continue-panel" aria-labelledby="continue-title"><div className="continue-copy"><span className="section-kicker">NEXT STEP</span><h2 id="continue-title">Prepare an allocation plan</h2><p>Only projects with validated upstream identity enter the deterministic allocation.</p></div>{eligibleProjects.length === 0 ? <p className="no-eligible">No verified upstream projects are eligible. Unverified discoveries remain visible above.</p> : <form className="plan-form" onSubmit={submitPlan}>
       <label>Budget (USD)<input required name="budget-usd" autoComplete="off" inputMode="decimal" type="number" min="1" max="10000" step="0.01" value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="e.g. 25.00"/></label>
       <label>Evaluation date<input required name="evaluation-date" autoComplete="off" type="date" value={evaluationDate} onChange={(event) => setEvaluationDate(event.target.value)}/></label>
-      <button className="button button-primary" type="submit" disabled={plan.isPending}>{plan.isPending ? 'Preparing plan…' : 'Continue to allocation'}<span aria-hidden="true">→</span></button>
+      <button className="button button-primary" type="submit" disabled={plan.isPending}>{plan.isPending ? 'Preparing plan…' : 'Create a new allocation plan'}<span aria-hidden="true">→</span></button>
       {formError && <p className="form-error" role="alert">{formError}</p>}{plan.isError && <ErrorMessage error={plan.error} message={plan.error instanceof ApiError && plan.error.status === 500 ? 'The server could not build a plan with this budget. Try a larger budget.' : undefined} retry={() => { try { plan.mutate({ cents: budgetToCents(budget), date: evaluationDate }) } catch (error) { setFormError(error instanceof Error ? error.message : 'Check the budget and date, then try again.') } }}/>} 
     </form>}</section>}
   </section>

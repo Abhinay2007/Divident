@@ -1,3 +1,7 @@
+import { planHeaders } from './planAccess.js'
+
+export { planHeaders } from './planAccess.js'
+
 export type Session = {
   id: string
   mode: string
@@ -9,6 +13,21 @@ export type Session = {
   binary_count: number | null
   error_message: string | null
 }
+
+export type Workspace = {
+  sessions: {
+    id: string
+    mode: string
+    status: string
+    source_count: number
+    binary_count: number | null
+    created_at: string
+    last_updated_at: string
+    plans: { id: string; created_at: string; last_updated_at: string }[]
+  }[]
+}
+
+export function getWorkspace() { return request<Workspace>('/api/workspace') }
 
 export type RuntimeConfig = {
   paypal_env: string
@@ -71,6 +90,7 @@ export type Plan = {
   order_id: string | null
   order_attempt: number
   capture_attempt: number
+  payout_attempt: number
   capture_gross_cents: number | null
   capture_fee_cents: number | null
   capture_net_cents: number | null
@@ -93,6 +113,7 @@ export type Plan = {
         resolution: { method: string; evidence: { field: string; value: string }[] | null }
       }[]
     } | null
+    maintainers: { maintainer_id: string; display_name: string; share_bps: number; amount_cents: number }[]
   }[]
 }
 
@@ -126,10 +147,18 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       ? 'The allocation rules could not fit this budget. Choose another amount and try again.'
       : code === 'charge_unavailable'
         ? 'Approval is unavailable because the required payment fee inputs are not measured. No order was created.'
+        : code === 'plan_auth_required'
+          ? 'This tab does not have access to the plan. Reopen the plan in the tab where it was created.'
         : code === 'order_outcome_unknown'
           ? 'The order result is uncertain. Check the plan status before taking another payment action.'
           : code === 'no_failed_payout_items'
             ? 'There are no failed payout items eligible for retry.'
+          : code === 'github_oauth_unavailable'
+            ? 'GitHub maintainer claims are not configured yet. Ask an administrator to finish OAuth setup.'
+            : code === 'maintainer_session_required'
+              ? 'This claim link has expired or is no longer active. Ask an administrator for a new invitation.'
+              : code === 'claim_invitation_invalid'
+                ? 'This invitation has expired or was already used. Ask an administrator for a new invitation.'
           : undefined
     throw new ApiError(
       knownMessage || (typeof detail === 'string' ? detail : `Request failed (${response.status}). Try again.`),
@@ -173,11 +202,6 @@ export function createPlan(sessionId: string, budgetCents: number, evaluationDat
   })
 }
 
-function planHeaders(id: string): HeadersInit {
-  const token = sessionStorage.getItem(`plan:${id}`)
-  return token ? { 'X-Plan-Token': token } : {}
-}
-
 export function getPlan(id: string) {
   return request<Plan>(`/api/plans/${encodeURIComponent(id)}`, { headers: planHeaders(id) })
 }
@@ -208,6 +232,7 @@ export function capturePlan(id: string) {
 export type PayoutItem = {
   sender_item_id: string
   upstream_key: string
+  maintainer_id: string | null
   recipient_display: string
   amount_cents: number
   status: string
@@ -240,4 +265,27 @@ export function retryFailedPayouts(id: string) {
 
 export function reconcilePayouts(id: string) {
   return request<Payouts>(`/api/plans/${encodeURIComponent(id)}/reconcile`, { method: 'POST', headers: planHeaders(id) })
+}
+
+export type MaintainerClaim = {
+  status: 'invited' | 'pending' | 'verified'
+  github_login: string | null
+  github_user_id: number | null
+  created_at: string
+  verified_at: string | null
+}
+
+export function redeemMaintainerClaim(token: string) {
+  return request<MaintainerClaim>('/api/maintainer-claims/session', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+}
+
+export function getMaintainerClaim() {
+  return request<MaintainerClaim>('/api/maintainer-claims/me')
+}
+
+export function startMaintainerClaim() {
+  return request<{ authorization_url: string }>('/api/maintainer-claims/oauth/start', { method: 'POST' })
 }
