@@ -137,15 +137,25 @@ export default function AllocationReview({ planId }: { planId: string }) {
         <button className="button button-secondary" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>{evidenceReview.isPending ? 'Reviewing evidence…' : 'Run AI Evidence Review'}</button></div>
       {evidenceReview.isError && <ErrorMessage error={evidenceReview.error} retry={() => evidenceReview.mutate()}/>}
       {aiReview?.status === 'unavailable' && <div className="quiet-card" role="status"><strong>AI review unavailable</strong><p>{aiReview.reason?.replaceAll('_', ' ') ?? 'Modal could not review this proposal.'}</p><button className="text-button" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>Try again</button></div>}
-      {aiReview?.status === 'invalid' && <div className="discovery-error" role="status"><strong>AI response not shown</strong><p>The response did not pass evidence citation validation{aiReview.reason ? ` (${aiReview.reason.replaceAll('_', ' ')}).` : '.'} No unsupported findings were displayed.</p><button className="text-button" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>Try again</button></div>}
+      {aiReview?.status === 'invalid' && <div className="discovery-error" role="status"><strong>AI response not shown</strong><p>The response did not pass strict evidence validation{aiReview.reason ? ` (${aiReview.reason.replaceAll('_', ' ')}).` : '.'} No unsupported findings were displayed.</p><button className="text-button" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>Try again</button></div>}
       {aiReview?.status === 'available' && <article className="explanation-card ai-evidence-review" aria-label="Modal-generated evidence review">
-        <div className="explanation-head"><h3>Modal evidence summary</h3><span className="method-label">AI-generated · {aiReview.model}</span></div>
+        <div className="explanation-head"><h3>Executive summary</h3><span className="method-label">AI-generated · {aiReview.model}</span></div>
         <p>{aiReview.summary}</p>
-        <h4>Evidence-based findings</h4>
-        <ul className="explanation-claims">{aiReview.contributors?.map((finding) => <li key={finding.contributor_id}><strong>Contributor {finding.contributor_id}</strong><p>{finding.observation}</p>
-          {finding.cited_pr_numbers.length > 0 && <p>Cited PRs: {finding.cited_pr_numbers.map((number) => `#${number}`).join(', ')}</p>}</li>)}</ul>
-        <h4>GitHub sources</h4>
-        {aiReview.citations.length > 0 ? <ul>{aiReview.citations.map((citation) => <li key={`${citation.pr_number}-${citation.url}`}><a href={citation.url} target="_blank" rel="noreferrer">PR #{citation.pr_number} ↗<span className="sr-only"> (opens in a new tab)</span></a></li>)}</ul> : <p>No verified GitHub links were returned.</p>}
+        <h4>Evidence-based interpretation</h4>
+        <p>Code reviews are documented participation, but do not mean a change was merged. Counts show distinct PRs in the supplied evidence, not review-event totals; they do not establish code quality, project impact, or current involvement.</p>
+        <h4>Contributor highlights</h4>
+        {aiReview.contributorGroups.map((group) => <section key={group.label} aria-label={group.label}>
+          <h5>{group.label}</h5><ul className="explanation-claims">{group.contributors.map((finding) => <li key={finding.contributor_id}>
+            <strong>Contributor {finding.contributor_id}</strong><p>{finding.observation}</p>
+            <p className="muted-label">{finding.merged_pr_count > 0 && `${finding.merged_pr_count} merged ${finding.merged_pr_count === 1 ? 'PR' : 'PRs'}`}{finding.merged_pr_count > 0 && finding.reviewed_pr_count > 0 && ' · '}{finding.reviewed_pr_count > 0 && `${finding.reviewed_pr_count} reviewed ${finding.reviewed_pr_count === 1 ? 'PR' : 'PRs'}`}</p>
+            {finding.citations.length > 0 && <ul aria-label={`Verified evidence for contributor ${finding.contributor_id}`}>
+              {finding.citations.map((citation) => <li key={`${citation.activity_type}-${citation.pr_number}-${citation.url}`}>
+                <span>{citation.activity_type === 'merged_pull_request' ? 'Merged PR' : 'Reviewed PR'} </span>
+                <a href={citation.url} target="_blank" rel="noreferrer">#{citation.pr_number} ↗<span className="sr-only"> (opens in a new tab)</span></a>
+              </li>)}
+            </ul>}
+          </li>)}</ul>
+        </section>)}
         {aiReview.advisoryFlags.length > 0 && <p className="muted-label">Signals: {aiReview.advisoryFlags.map((flag) => flag.replaceAll('_', ' ')).join(' · ')}</p>}
       </article>}
     </section>

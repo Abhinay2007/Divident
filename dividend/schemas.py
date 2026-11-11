@@ -186,9 +186,13 @@ class EvidenceReviewContributor(Contract):
     contributor_id: str
     observation: str
     cited_pr_numbers: list[int] = Field(default_factory=list, strict=True)
+    merged_pr_count: int = Field(strict=True)
+    reviewed_pr_count: int = Field(strict=True)
 
 
 class EvidenceReviewCitation(Contract):
+    contributor_id: str
+    activity_type: Literal["merged_pull_request", "code_review"]
     pr_number: int = Field(strict=True)
     url: str
 
@@ -196,7 +200,7 @@ class EvidenceReviewCitation(Contract):
 class EvidenceReviewResponse(Contract):
     status: Literal["available", "unavailable", "invalid"]
     reason: str | None = None
-    summary: str | None = None
+    summary: str | None = Field(default=None, min_length=1, max_length=1500, pattern=r"\S")
     contributors: list[EvidenceReviewContributor] = Field(default_factory=list)
     cited_pr_numbers: list[int] = Field(default_factory=list, strict=True)
     citations: list[EvidenceReviewCitation] = Field(default_factory=list)

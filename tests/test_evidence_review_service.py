@@ -80,33 +80,113 @@ def valid_summary():
             "advisory_flags": ["merged_pr_activity", "review_activity", "multiple_pr_evidence"]}
 
 
+def summary_validation_inputs(summary):
+    raw = valid_summary()
+    raw["summary"] = summary
+    contributors = {"9001": {
+        "contributor_id": "9001", "merged_pr_numbers": [1], "reviewed_pr_numbers": [2],
+        "evidence_references": [
+            {"signal": "merged_pull_request", "pr_number": 1,
+             "url": "https://github.com/curl/curl/pull/1"},
+            {"signal": "code_review", "pr_number": 2,
+             "url": "https://github.com/curl/curl/pull/2"},
+        ],
+    }}
+    return raw, contributors
+
+
+def test_natural_donor_summary_satisfies_existing_summary_contract():
+    summary = ("The supplied evidence shows merged contributions alongside code reviews. "
+               "Reviews are a separate form of participation, while these counts alone do not establish impact.")
+    raw, contributors = summary_validation_inputs(summary)
+    result = EvidenceReviewService._validate(raw, contributors, "proposal-hash")
+    assert result["summary"] == summary
+
+
+def test_summary_between_500_and_1500_characters_is_valid():
+    summary = "The supplied evidence shows merged contributions and code review activity. " + "Further context. " * 40
+    assert 500 < len(summary) <= 1500
+    raw, contributors = summary_validation_inputs(summary)
+    assert EvidenceReviewService._validate(raw, contributors, "proposal-hash")["summary"] == summary
+
+
+@pytest.mark.parametrize(("summary", "expected_type", "expected_chars", "constraint"), [
+    ("", "str", 0, "empty_or_whitespace"),
+    (" \t\n", "str", 3, "empty_or_whitespace"),
+    ("x" * 1501, "str", 1501, "exceeds_max_length"),
+    (None, "NoneType", None, "expected_string"),
+    (["text"], "list", None, "expected_string"),
+])
+def test_summary_boundary_failures_have_safe_metadata(summary, expected_type,
+                                                       expected_chars, constraint):
+    from dividend.services.evidence_review_service import EvidenceValidationError
+
+    raw, contributors = summary_validation_inputs(summary)
+    with pytest.raises(EvidenceValidationError) as error:
+        EvidenceReviewService._validate(raw, contributors, "proposal-hash")
+    assert error.value.detail == {
+        "field": "summary", "reason": "invalid_text_or_length",
+        "summary_type": expected_type, "summary_chars": expected_chars,
+        "summary_constraint": constraint,
+    }
+
+
 def test_realistic_multi_project_output_validates_all_contributors_and_citations():
     contributors = {
         "123": {"contributor_id": "123", "merged_pr_numbers": [11],
             "reviewed_pr_numbers": [14], "evidence_references": [
-                {"pr_number": 11, "url": "https://github.com/alpha/engine/pull/11"},
-                {"pr_number": 14, "url": "https://github.com/alpha/engine/pull/14"},
+                {"signal": "merged_pull_request", "pr_number": 11,
+                 "url": "https://github.com/alpha/engine/pull/11"},
+                {"signal": "code_review", "pr_number": 14,
+                 "url": "https://github.com/alpha/engine/pull/14"},
             ]},
         "456": {"contributor_id": "456", "merged_pr_numbers": [],
             "reviewed_pr_numbers": [20], "evidence_references": [
-                {"pr_number": 20, "url": "https://github.com/beta/tool/pull/20"},
+                {"signal": "code_review", "pr_number": 20,
+                 "url": "https://github.com/beta/tool/pull/20"},
+            ]},
+        "789": {"contributor_id": "789", "merged_pr_numbers": [31],
+            "reviewed_pr_numbers": [], "evidence_references": [
+                {"signal": "merged_pull_request", "pr_number": 31,
+                 "url": "https://github.com/gamma/lib/pull/31"},
             ]},
     }
     raw = {
-        "summary": "Contributor 123 merged PR #11 and reviewed PR #14; contributor 456 reviewed PR #20.",
+        "summary": "The supplied evidence shows merged work and reviews across several projects. "
+                   "Review activity is meaningful participation, but these counts do not establish code quality or impact.",
         "contributors": [
-            {"contributor_id": "123", "observation": "Merged PR #11 and reviewed PR #14.",
+            {"contributor_id": "123", "observation": "Activity spans merged work and reviews across two distinct PRs.",
              "cited_pr_numbers": [11, 14]},
-            {"contributor_id": "456", "observation": "Reviewed PR #20.",
+            {"contributor_id": "456", "observation": "The supplied record shows review participation on one distinct PR, with no merged PR listed.",
              "cited_pr_numbers": [20]},
+            {"contributor_id": "789", "observation": "One verified merged PR appears in the supplied evidence.",
+             "cited_pr_numbers": [31]},
         ],
-        "cited_pr_numbers": [11, 14, 20],
+        "cited_pr_numbers": [11, 14, 20, 31],
         "advisory_flags": ["merged_pr_activity", "review_activity", "multiple_pr_evidence"],
     }
     result = EvidenceReviewService._validate(raw, contributors, "proposal-hash")
     assert result["status"] == "available"
-    assert [row["contributor_id"] for row in result["contributors"]] == ["123", "456"]
-    assert [row["pr_number"] for row in result["citations"]] == [11, 14, 20]
+    assert [row["contributor_id"] for row in result["contributors"]] == ["123", "456", "789"]
+    assert [(row["contributor_id"], row["activity_type"], row["pr_number"])
+            for row in result["citations"]] == [
+                ("123", "code_review", 14), ("123", "merged_pull_request", 11),
+                ("456", "code_review", 20), ("789", "merged_pull_request", 31),
+            ]
+    assert [(row["merged_pr_count"], row["reviewed_pr_count"])
+            for row in result["contributors"]] == [(1, 1), (0, 1), (1, 0)]
+
+
+def test_review_events_on_one_pr_count_as_one_distinct_reviewed_pr():
+    proposal = {"projects": [{"evidence": [
+        {"github_user_id": 456, "pr_number": 20, "signal_type": "code_review",
+         "source_url": "https://github.com/beta/tool/pull/20", "event_id": 1},
+        {"github_user_id": 456, "pr_number": 20, "signal_type": "code_review",
+         "source_url": "https://github.com/beta/tool/pull/20", "event_id": 2},
+    ]}]}
+    contributor = EvidenceReviewService._aggregate(proposal)["456"]
+    assert contributor["merged_pr_numbers"] == []
+    assert contributor["reviewed_pr_numbers"] == [20]
 
 
 class FakeModal:
@@ -142,17 +222,29 @@ def test_cached_summary_and_financial_data_are_unchanged(evidence_db):
         assert first == second
         assert first["status"] == "available"
         assert first["citations"] == [
-            {"pr_number": 1, "url": "https://github.com/curl/curl/pull/1"},
-            {"pr_number": 2, "url": "https://github.com/curl/curl/pull/2"},
+            {"contributor_id": "9001", "activity_type": "code_review",
+             "pr_number": 2, "url": "https://github.com/curl/curl/pull/2"},
+            {"contributor_id": "9001", "activity_type": "merged_pull_request",
+             "pr_number": 1, "url": "https://github.com/curl/curl/pull/1"},
         ]
+        assert first["contributors"][0]["merged_pr_count"] == 1
+        assert first["contributors"][0]["reviewed_pr_count"] == 1
         assert provider.request_count == 1
         assert "9001" in provider.calls[0][0]
         assert '"merged"' in provider.calls[0][0]
-        assert ('Supported advisory flags: ["merged_pr_activity","multiple_pr_evidence",'
+        assert ('evidence-supported set: ["merged_pr_activity","multiple_pr_evidence",'
                 '"review_activity"]') in provider.calls[0][0]
+        assert "2–4 concise sentences as an executive summary" in provider.calls[0][0]
+        assert "Target approximately 700–1100 characters including spaces and never exceed 1500 characters" in provider.calls[0][0]
+        assert "exact distinct merged-PR and reviewed-PR counts are shown separately" in provider.calls[0][0]
+        assert "Never invent names" in provider.calls[0][0]
+        assert "Do not print PR lists in prose" in provider.calls[0][0]
         assert "merged_pr_numbers" not in provider.calls[0][0]
-        assert "100" not in provider.calls[0][0]  # No allocation cents in the prompt.
+        assert "amount_cents" not in provider.calls[0][0]
         assert "email" not in provider.calls[0][0].lower()
+        assert provider.calls[0][1]["properties"]["summary"] == {
+            "type": "string", "minLength": 1, "maxLength": 1500,
+        }
         assert plan.fee_policy_snapshot == snapshot
         assert (plan.state, plan.budget_cents, line.amount_cents,
                 line.payable_cents, line.reserved_cents) == financials
@@ -335,6 +427,58 @@ def test_invalid_model_evidence_reports_field_and_reason_without_logging_payload
     assert "Summarize these GitHub contributions" not in caplog.text
 
 
+def test_wrong_contributor_citation_reports_attribution_mismatch():
+    from dividend.services.evidence_review_service import EvidenceValidationError
+
+    raw, contributors = summary_validation_inputs("Verified activity includes merged work and review participation.")
+    contributors["456"] = {
+        "contributor_id": "456", "merged_pr_numbers": [], "reviewed_pr_numbers": [3],
+        "evidence_references": [{"signal": "code_review", "pr_number": 3,
+                                 "url": "https://github.com/curl/curl/pull/3"}],
+    }
+    raw["contributors"].append({"contributor_id": "456", "observation": "Reviewed PR #1.",
+                                "cited_pr_numbers": [1]})
+    raw["cited_pr_numbers"] = [1, 2]
+    with pytest.raises(EvidenceValidationError) as error:
+        EvidenceReviewService._validate(raw, contributors, "proposal-hash")
+    assert error.value.detail == {
+        "field": "contributors[].cited_pr_numbers", "reason": "citation_not_in_evidence",
+        "citation_count": 1, "invalid_citation_count": 1, "attribution_mismatch": True,
+    }
+
+
+def test_top_level_citation_set_must_match_findings_and_reports_safe_counts():
+    from dividend.services.evidence_review_service import EvidenceValidationError
+
+    raw, contributors = summary_validation_inputs("A concise, evidence-grounded contribution summary.")
+    raw["cited_pr_numbers"] = [1]
+    with pytest.raises(EvidenceValidationError) as error:
+        EvidenceReviewService._validate(raw, contributors, "proposal-hash")
+    assert error.value.detail == {
+        "field": "cited_pr_numbers", "reason": "citations_do_not_match_findings",
+        "citation_count": 1, "expected_citation_count": 2,
+        "missing_citation_count": 1, "extra_citation_count": 0,
+    }
+
+
+def test_citation_mismatch_diagnostic_logs_counts_only(evidence_db, caplog):
+    import logging
+
+    plan_id = make_plan(evidence_db)
+    output = valid_summary()
+    output["cited_pr_numbers"] = [1]
+    caplog.set_level(logging.WARNING)
+    with evidence_db() as db:
+        result = EvidenceReviewService(evidence_db, FakeModal(result=output)).review(plan_id, db)
+    assert result["status"] == "invalid"
+    assert "validation_field=cited_pr_numbers" in caplog.text
+    assert "validation_reason=citations_do_not_match_findings" in caplog.text
+    assert "missing_citation_count': 1" in caplog.text
+    assert "extra_citation_count': 0" in caplog.text
+    assert "https://github.com" not in caplog.text
+    assert "Merged PR #1" not in caplog.text
+
+
 def test_model_json_parse_failure_is_logged_by_field_and_reason(evidence_db, caplog):
     import logging
 
@@ -354,6 +498,26 @@ def test_model_json_parse_failure_is_logged_by_field_and_reason(evidence_db, cap
     assert result["status"] == "invalid"
     assert "validation_field=content" in caplog.text
     assert "validation_reason=malformed_json" in caplog.text
+
+
+def test_overlong_summary_diagnostic_does_not_log_summary_text(evidence_db, caplog):
+    import logging
+
+    plan_id = make_plan(evidence_db)
+    private_summary = "PRIVATE SUMMARY " + "x" * 1501
+    result = valid_summary()
+    result["summary"] = private_summary
+    caplog.set_level(logging.WARNING)
+    with evidence_db() as db:
+        response = EvidenceReviewService(evidence_db, FakeModal(result=result)).review(plan_id, db)
+    assert response["status"] == "invalid"
+    assert "validation_field=summary" in caplog.text
+    assert "summary_type=str" in caplog.text
+    assert f"summary_chars={len(private_summary)}" in caplog.text
+    assert "expected_summary_min_non_whitespace_chars=1" in caplog.text
+    assert "expected_summary_max_chars=1500" in caplog.text
+    assert "summary_constraint=exceeds_max_length" in caplog.text
+    assert private_summary not in caplog.text
 
 
 def test_provider_unavailable_returns_explicit_status(evidence_db):

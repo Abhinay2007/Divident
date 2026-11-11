@@ -8,6 +8,7 @@ from dividend.schemas import (
     FeeParams, HealthResponse, ItemResponse, LedgerEventResponse, LedgerResponse,
     MoneySummary, PlanBudgetPatchRequest, PlanCreateRequest, PlanLineResponse,
     PlanResponse, ProjectResponse, ProjectsResponse, PayoutResponse, PayoutsResponse,
+    EvidenceReviewResponse,
     ResolveLiveRequest, ResolveLiveResponse, SessionCreateRequest, SessionResponse,
 )
 
@@ -110,3 +111,12 @@ def test_all_response_contracts_construct_with_documented_fields():
 def test_extra_fields_forbidden():
     with pytest.raises(ValidationError):
         SessionCreateRequest(mode="demo", extra="x")
+
+
+def test_evidence_review_response_summary_uses_service_bounds():
+    assert EvidenceReviewResponse(status="available", summary="A concise evidence summary.").summary
+    assert EvidenceReviewResponse(status="unavailable", summary=None).summary is None
+    assert len(EvidenceReviewResponse(status="available", summary="x" * 1200).summary) == 1200
+    for summary in ("", " \t ", "x" * 1501):
+        with pytest.raises(ValidationError):
+            EvidenceReviewResponse(status="available", summary=summary)

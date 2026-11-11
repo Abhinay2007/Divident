@@ -135,9 +135,9 @@ export type EvidenceReview = {
   status: 'available' | 'unavailable' | 'invalid'
   reason?: string | null
   summary?: string | null
-  contributors?: { contributor_id: string; observation: string; cited_pr_numbers: number[] }[]
+  contributors?: { contributor_id: string; observation: string; cited_pr_numbers: number[]; merged_pr_count: number; reviewed_pr_count: number }[]
   cited_pr_numbers?: number[]
-  citations?: { pr_number: number; url: string }[]
+  citations?: { contributor_id: string; activity_type: 'merged_pull_request' | 'code_review'; pr_number: number; url: string }[]
   advisory_flags?: string[]
   proposal_sha256?: string | null
   model?: string | null
