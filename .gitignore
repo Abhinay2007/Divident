@@ -46,6 +46,11 @@ Thumbs.db
 
 /AGENTS.md
 /docs/*
+!/docs/Technological Implementation.md
+!/docs/Design.md
+!/docs/Potential Impact.md
+!/docs/Innovation-Idea.md
+!/docs/Presentation.md
 /day1/
 /dividend.egg-info/
 /paypal-plan.md
