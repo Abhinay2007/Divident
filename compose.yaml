@@ -21,12 +21,12 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
-      LLM_PROVIDER: groq
       LLM_LIVE_ENABLED: "false"
       LLM_KILL_SWITCH: "true"
-      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-20b}
-      LLM_MAX_SOURCES_PER_SESSION: ${LLM_MAX_SOURCES_PER_SESSION:-5}
-      LLM_MAX_CALLS_PER_HOUR: ${LLM_MAX_CALLS_PER_HOUR:-100}
+      MODAL_ENDPOINT_URL: ${MODAL_ENDPOINT_URL:-https://asthorat7-pune--ep-deepseek-v4-1-flash-1017-server.us-west.modal.direct/v1}
+      MODAL_MODEL: ${MODAL_MODEL:-deepseek-ai/DeepSeek-V4.1-Flash-1017}
+      MODAL_PROXY_TOKEN_ID: ${MODAL_PROXY_TOKEN_ID:-}
+      MODAL_PROXY_TOKEN_SECRET: ${MODAL_PROXY_TOKEN_SECRET:-}
     volumes:
       - dividend-local-test-data:/data
     healthcheck:

@@ -28,13 +28,12 @@ class Settings(BaseSettings):
     PAYPAL_CLIENT_ID: str | None = None
     PAYPAL_CLIENT_SECRET: str | None = Field(default=None, repr=False)
 
-    LLM_PROVIDER: Literal["groq"] = "groq"
-    GROQ_API_KEY: str | None = Field(default=None, repr=False)
-    LLM_MODEL: str = "openai/gpt-oss-20b"
+    MODAL_ENDPOINT_URL: AnyHttpUrl = "https://asthorat7-pune--ep-deepseek-v4-1-flash-1017-server.us-west.modal.direct/v1"
+    MODAL_MODEL: str = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    MODAL_PROXY_TOKEN_ID: str | None = Field(default=None, repr=False)
+    MODAL_PROXY_TOKEN_SECRET: str | None = Field(default=None, repr=False)
     LLM_LIVE_ENABLED: bool = True
     LLM_KILL_SWITCH: bool = False
-    LLM_MAX_SOURCES_PER_SESSION: int = Field(default=5, ge=1)
-    LLM_MAX_CALLS_PER_HOUR: int = Field(default=100, ge=1)
 
     ENRICH_MODE: Literal["fixtures", "live"] = "fixtures"
     GITHUB_TOKEN: str | None = Field(default=None, repr=False)
@@ -74,8 +73,12 @@ class Settings(BaseSettings):
             ) if not value or not value.strip()]
             if missing:
                 raise ValueError("PayPal mode requires: " + ", ".join(missing))
-        if self.LLM_LIVE_ENABLED and not self.LLM_KILL_SWITCH and not self.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY is required when LLM_LIVE_ENABLED is true")
+        if bool(self.MODAL_PROXY_TOKEN_ID) != bool(self.MODAL_PROXY_TOKEN_SECRET):
+            raise ValueError("Modal proxy authentication requires both token ID and secret")
+        if self.LLM_LIVE_ENABLED and not self.LLM_KILL_SWITCH and not (
+            self.MODAL_PROXY_TOKEN_ID and self.MODAL_PROXY_TOKEN_SECRET
+        ):
+            raise ValueError("MODAL_PROXY_TOKEN_ID and MODAL_PROXY_TOKEN_SECRET are required when LLM is enabled")
         if self.ENRICH_MODE == "live":
             missing = [name for name, value in (
                 ("GITHUB_TOKEN", self.GITHUB_TOKEN), ("UDD_DSN", self.UDD_DSN),

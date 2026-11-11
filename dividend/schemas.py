@@ -188,12 +188,18 @@ class EvidenceReviewContributor(Contract):
     cited_pr_numbers: list[int] = Field(default_factory=list, strict=True)
 
 
+class EvidenceReviewCitation(Contract):
+    pr_number: int = Field(strict=True)
+    url: str
+
+
 class EvidenceReviewResponse(Contract):
     status: Literal["available", "unavailable", "invalid"]
     reason: str | None = None
     summary: str | None = None
     contributors: list[EvidenceReviewContributor] = Field(default_factory=list)
     cited_pr_numbers: list[int] = Field(default_factory=list, strict=True)
+    citations: list[EvidenceReviewCitation] = Field(default_factory=list)
     advisory_flags: list[str] = Field(default_factory=list)
     proposal_sha256: str | None = None
     model: str | None = None

@@ -69,11 +69,16 @@ def test_non_sandbox_and_invalid_payment_mode_rejected(tmp_path):
         Settings(**base(tmp_path, PAYMENTS_MODE="other"))
 
 
-def test_groq_only_and_live_key_requirement(tmp_path):
-    with pytest.raises(ValidationError):
-        Settings(**base(tmp_path, LLM_PROVIDER="other"))
-    with pytest.raises(ValidationError, match="GROQ_API_KEY"):
+def test_modal_proxy_credentials_required_when_live(tmp_path):
+    with pytest.raises(ValidationError, match="MODAL_PROXY_TOKEN_ID"):
         Settings(**base(tmp_path, LLM_LIVE_ENABLED=True))
+    with pytest.raises(ValidationError, match="both token ID and secret"):
+        Settings(**base(tmp_path, MODAL_PROXY_TOKEN_ID="id"))
+    settings = Settings(**base(tmp_path, LLM_LIVE_ENABLED=True,
+                               MODAL_PROXY_TOKEN_ID="id", MODAL_PROXY_TOKEN_SECRET="secret"))
+    assert str(settings.MODAL_ENDPOINT_URL).startswith("https://")
+    assert str(settings.MODAL_ENDPOINT_URL) == "https://asthorat7-pune--ep-deepseek-v4-1-flash-1017-server.us-west.modal.direct/v1"
+    assert settings.MODAL_MODEL == "deepseek-ai/DeepSeek-V4.1-Flash-1017"
     assert Settings(**base(tmp_path, LLM_LIVE_ENABLED=True, LLM_KILL_SWITCH=True)).LLM_KILL_SWITCH
 
 

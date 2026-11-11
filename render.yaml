@@ -30,15 +30,15 @@ services:
         value: fixtures
       - key: DEMO_SEED_ON_BOOT
         value: "true"
-      - key: LLM_PROVIDER
-        value: groq
-      - key: LLM_MODEL
-        value: openai/gpt-oss-20b
+      - key: MODAL_ENDPOINT_URL
+        value: https://asthorat7-pune--ep-deepseek-v4-1-flash-1017-server.us-west.modal.direct/v1
+      - key: MODAL_MODEL
+        value: deepseek-ai/DeepSeek-V4.1-Flash-1017
+      - key: MODAL_PROXY_TOKEN_ID
+        sync: false
+      - key: MODAL_PROXY_TOKEN_SECRET
+        sync: false
       - key: LLM_LIVE_ENABLED
         value: "false"
       - key: LLM_KILL_SWITCH
         value: "true"
-      - key: LLM_MAX_SOURCES_PER_SESSION
-        value: "5"
-      - key: LLM_MAX_CALLS_PER_HOUR
-        value: "100"

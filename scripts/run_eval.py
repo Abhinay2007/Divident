@@ -1,14 +1,12 @@
-"""Reproducible fixture evaluation; live mode requires an explicit API key env var."""
+"""Reproducible offline fixture evaluation for the upstream resolver."""
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 import yaml
 
 from dividend.enrichment.base import FactSet
-from dividend.llm.groq_provider import GroqProvider
 from dividend.upstream.mapper import map_source
 from dividend.upstream.overrides import load_overrides
 from dividend.upstream.resolver import cache_key, resolve
@@ -62,7 +60,7 @@ def _score(predictions, labels, excluded):
     }
 
 
-def evaluate(mode="offline", provider=None):
+def evaluate(provider=None):
     fixture = json.loads((ROOT / "data/upstream_eval_cases.json").read_text(encoding="utf-8"))
     labels = {case["source"]: case["expected_key"] for case in fixture["cases"]}
     overrides = load_overrides(ROOT / "data/upstream_overrides.yaml")
@@ -80,14 +78,14 @@ def evaluate(mode="offline", provider=None):
     cache = {}
     accepted = resolve(
         unresolved_facts, counted, set(overrides.family_patterns or {}), cache_stats=stats,
-        model="openai/gpt-oss-20b" if mode == "offline" else os.environ.get("LLM_MODEL", "openai/gpt-oss-20b"),
+        model="offline-mock",
         cache_get=lambda fact, model: cache.get(cache_key(fact, model)),
         cache_set=lambda fact, model, response: cache.__setitem__(cache_key(fact, model), response),
     )
     assisted = dict(baseline)
     assisted.update({proposal.source_name: proposal.upstream_key for proposal in accepted})
     result = {
-        "mode": mode,
+        "mode": "offline",
         "fixture_purpose": fixture["purpose"],
         "sources": len(labels),
         "methodology": "Expected keys come only from the checked-in fixture. Intentional no_upstream cases are excluded from coverage; unresolved cases remain in its denominator. Precision is correct mappings / all mapped sources. Rejected proposals count each proposal on every retry.",
@@ -105,8 +103,8 @@ def evaluate(mode="offline", provider=None):
         "representative_failures": [fact.source_name for fact in unresolved_facts],
         "limitations": [
             "The fixture describes resolver contract cases, not a representative Debian sample.",
-            "Offline mode uses deliberately invalid mock citations and cannot measure Groq quality.",
-            "No live Groq run is implied by these results.",
+            "Offline mode uses deliberately invalid mock citations and cannot measure model quality.",
+            "No live model run is performed by this evaluation.",
         ],
     }
     return result
@@ -114,20 +112,8 @@ def evaluate(mode="offline", provider=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("offline", "live"), default="offline")
-    args = parser.parse_args()
-    if args.mode == "live":
-        key = os.environ.get("GROQ_API_KEY")
-        if not key:
-            parser.error("live mode requires GROQ_API_KEY in the process environment")
-        provider = GroqProvider(key, os.environ.get("LLM_MODEL", "openai/gpt-oss-20b"))
-        try:
-            result = evaluate("live", provider)
-        finally:
-            provider.close()
-    else:
-        result = evaluate("offline")
-    print(json.dumps(result, indent=2, sort_keys=True))
+    parser.parse_args()
+    print(json.dumps(evaluate(), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { approvePlan, capturePlan, getPlan, ApiError } from './api'
 import { paypalReturnState } from './planAccess.js'
+import { captureConfirmationMessage } from './paymentConfirmation.js'
 
 function money(cents: number | null) {
   return cents === null ? 'Unknown' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -55,14 +56,14 @@ export default function FundScreen({ planId }: { planId: string }) {
         {record.state === 'draft' && <button className="button button-primary" type="button" disabled={approve.isPending || approvalUnavailable} title={approvalUnavailable ? 'Approval requires measured payment fee inputs.' : undefined} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking fee inputs…' : approvalUnavailable ? 'Approval unavailable · fees unmeasured' : 'Create PayPal order'}</button>}
         {record.state === 'funding' && record.order_id && !returnedFromPayPal && <button className="button button-secondary" type="button" disabled={approve.isPending} onClick={() => approve.mutate()}>{approve.isPending ? 'Retrieving approval link…' : cancelledAtPayPal ? 'Reopen PayPal approval' : 'Retrieve existing PayPal approval link'}</button>}
         {approval && <a className="button button-secondary" href={approval.approval_url}>Continue to PayPal Sandbox ↗</a>}
-        {record.state === 'funding' && record.order_id && returnedFromPayPal && <button className="button button-primary" type="button" disabled={capture.isPending} onClick={() => {
-          if (window.confirm(`Capture the approved PayPal order for ${money(record.charge_cents)}?`)) capture.mutate()
+        {record.state === 'funding' && record.order_id && returnedFromPayPal && record.charge_cents !== null && <button className="button button-primary" type="button" disabled={capture.isPending} onClick={() => {
+          if (window.confirm(captureConfirmationMessage(record.charge_cents))) capture.mutate()
         }}>{capture.isPending ? 'Confirming capture…' : 'Confirm and capture funds'}</button>}
         {(uncertain || (record.state === 'funding' && record.order_id && !returnedFromPayPal) || capture.isError) && <button className="button button-secondary" type="button" disabled={plan.isFetching} onClick={() => { approve.reset(); capture.reset(); void plan.refetch() }}>{plan.isFetching ? 'Checking status…' : 'Check plan status'}</button>}
         {approve.isError && <PaymentError error={approve.error} retry={approve.error instanceof ApiError && !['order_outcome_unknown', 'charge_unavailable'].includes(approve.error.code ?? '') ? () => approve.mutate() : undefined} refresh={() => { approve.reset(); void plan.refetch() }}/ >}
         {capture.isError && <PaymentError error={capture.error} refresh={() => { capture.reset(); void plan.refetch() }}/ >}
         {approve.isSuccess && <p className="form-success" role="status">PayPal approval is ready for order {approve.data.order_id}. No funds have been captured.</p>}
-        {capture.isSuccess && <p className="form-success" role="status">Provider response: {capture.data.capture.status}. Gross {money(capture.data.capture.gross_cents)}; plan state {label(capture.data.state)}.</p>}
+        {capture.isSuccess && <div className="form-success" role="status"><strong>PayPal Sandbox capture response</strong><p>Capture reference <code>{capture.data.capture.capture_id}</code> · {capture.data.capture.status} · {capture.data.capture.currency}</p><p>Gross {money(capture.data.capture.gross_cents)} · PayPal fee {money(capture.data.capture.fee_cents)} · Net {money(capture.data.capture.net_cents)} · plan state {label(capture.data.state)}</p></div>}
       </div>
     </section>
     <p className="funding-footnote">An order is not a completed payment. Funds are shown as received only after PayPal confirms capture. No payout is initiated here.</p>

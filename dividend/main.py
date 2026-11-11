@@ -32,8 +32,8 @@ from .upstream.overrides import load_overrides
 from .services import EvidenceReviewService, SessionService
 from .payments.fake import FakeProvider
 from .payments.paypal import PayPalProvider
-from .llm.groq_provider import GroqProvider
-from .llm.limits import GroqRequestBudget, LiveResolutionLimits
+from .llm.modal_provider import ModalProvider
+from .llm.limits import ModalRequestBudget
 from .services.payment_service import PaymentService
 from .services.config_service import ConfigService
 from .services.maintainer_claim_service import ClaimError, MaintainerClaimService
@@ -63,13 +63,14 @@ def create_app(
                                   configured.PAYPAL_CLIENT_SECRET or "")
     llm_enabled = configured.LLM_LIVE_ENABLED and not configured.LLM_KILL_SWITCH
     owns_llm = llm_provider is None and llm_enabled
-    resolver_provider = llm_provider if llm_enabled else None
-    llm_limits = LiveResolutionLimits(configured.LLM_MAX_SOURCES_PER_SESSION,
-                                      configured.LLM_MAX_CALLS_PER_HOUR) if llm_enabled else None
-    if resolver_provider is None and llm_enabled:
-        resolver_provider = GroqProvider(
-            configured.GROQ_API_KEY or "", configured.LLM_MODEL,
-            budget=GroqRequestBudget(factory),
+    review_provider = llm_provider if llm_enabled else None
+    if review_provider is None and llm_enabled:
+        review_provider = ModalProvider(
+            configured.MODAL_MODEL,
+            budget=ModalRequestBudget(factory),
+            endpoint_url=str(configured.MODAL_ENDPOINT_URL),
+            proxy_token_id=configured.MODAL_PROXY_TOKEN_ID,
+            proxy_token_secret=configured.MODAL_PROXY_TOKEN_SECRET,
         )
 
     @asynccontextmanager
@@ -83,7 +84,7 @@ def create_app(
             if owns_provider:
                 provider.close()
             if owns_llm:
-                resolver_provider.close()
+                review_provider.close()
             if owns_engine:
                 app_engine.dispose()
 
@@ -96,10 +97,9 @@ def create_app(
         str(configured.PUBLIC_BASE_URL),
     )
     app.state.provider = provider
-    app.state.llm = resolver_provider
-    app.state.llm_limits = llm_limits
+    app.state.llm = review_provider
     app.state.evidence_review_service = EvidenceReviewService(
-        factory, resolver_provider, configured.LLM_MODEL,
+        factory, review_provider, configured.MODAL_MODEL,
     )
     app.state.payment_service = (
         PaymentService(provider, str(configured.PUBLIC_BASE_URL),
@@ -115,7 +115,6 @@ def create_app(
                         db, session_id,
                         FixtureEnricher(Path(__file__).parent / "data" / "demo_enrichment.json"),
                         load_overrides(),
-                        resolver_provider, configured.LLM_MODEL, llm_limits,
                     )
                     db.commit()
                 except Exception as exc:
@@ -131,7 +130,6 @@ def create_app(
                         db, session_id,
                         LiveEnricher(UDDClient(configured.UDD_DSN), GitHubClient(configured.GITHUB_TOKEN)),
                         load_overrides(),
-                        resolver_provider, configured.LLM_MODEL, llm_limits,
                     )
                     db.commit()
                 except Exception as exc:

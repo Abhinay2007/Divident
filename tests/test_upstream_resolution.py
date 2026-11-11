@@ -36,7 +36,7 @@ def test_validator_requires_repository_evidence_to_derive_identity():
     ]), facts)
 
 
-def test_resolver_never_sends_udd_contact_to_groq_or_uses_it_in_cache_key():
+def test_resolver_never_sends_udd_contact_to_model_or_uses_it_in_cache_key():
     facts = FactSet("pkg", repository_url="https://github.com/acme/pkg",
                     contact="private-maintainer@example.test")
     prompt = _prompt([facts])

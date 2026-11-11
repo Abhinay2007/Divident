@@ -3,17 +3,20 @@
 from collections import deque
 from datetime import UTC, datetime, time
 import hashlib
+import logging
 from threading import Lock
 from time import monotonic
 
 from ..errors import RateLimitExceeded
 from ..models import LLMCache
 
+_logger = logging.getLogger(__name__)
 
-class GroqRequestBudget:
+
+class ModalRequestBudget:
     """Persistent rolling request/token budgets stored in the existing LLM cache."""
 
-    KEY = hashlib.sha256(b"groq-application-request-budget-v1").hexdigest()
+    KEY = hashlib.sha256(b"modal-application-request-budget-v1").hexdigest()
     # shortcut: counter writes serialize per process; use a database lease before multi-worker deployments.
     _lock = Lock()
 
@@ -22,7 +25,11 @@ class GroqRequestBudget:
 
     def reserve(self, input_tokens: int) -> None:
         if input_tokens > 3000:
-            raise RateLimitExceeded("Groq input token limit reached",
+            _logger.warning(
+                "Modal request budget rejected guard=input_tokens input_tokens=%d limit=3000",
+                input_tokens,
+            )
+            raise RateLimitExceeded("Modal input token limit reached",
                                     code="llm_input_budget_exceeded")
         current = datetime.now(UTC)
         now = current.timestamp()
@@ -36,11 +43,37 @@ class GroqRequestBudget:
             per_minute_tokens = sum(amount for stamp, amount in tokens if stamp >= now - 60)
             per_day_tokens = sum(amount for _, amount in tokens)
             request_tokens = input_tokens + 700
-            if per_minute_requests >= 2 or len(requests) >= 20:
-                raise RateLimitExceeded("Groq request budget exhausted",
+            if per_minute_requests >= 2:
+                _logger.warning(
+                "Modal request budget rejected guard=requests_per_minute "
+                    "requests=%d limit=2 input_tokens=%d",
+                    per_minute_requests, input_tokens,
+                )
+                raise RateLimitExceeded("Modal request budget exhausted",
                                         code="llm_request_budget_exhausted")
-            if per_minute_tokens + request_tokens > 8000 or per_day_tokens + request_tokens > 200_000:
-                raise RateLimitExceeded("Groq token budget exhausted",
+            if len(requests) >= 20:
+                _logger.warning(
+                "Modal request budget rejected guard=requests_utc_day "
+                    "requests=%d limit=20 input_tokens=%d",
+                    len(requests), input_tokens,
+                )
+                raise RateLimitExceeded("Modal request budget exhausted",
+                                        code="llm_request_budget_exhausted")
+            if per_minute_tokens + request_tokens > 8000:
+                _logger.warning(
+                "Modal request budget rejected guard=tokens_per_minute "
+                    "tokens=%d requested_tokens=%d limit=8000 input_tokens=%d",
+                    per_minute_tokens, request_tokens, input_tokens,
+                )
+                raise RateLimitExceeded("Modal token budget exhausted",
+                                        code="llm_token_budget_exhausted")
+            if per_day_tokens + request_tokens > 200_000:
+                _logger.warning(
+                "Modal request budget rejected guard=tokens_utc_day "
+                    "tokens=%d requested_tokens=%d limit=200000 input_tokens=%d",
+                    per_day_tokens, request_tokens, input_tokens,
+                )
+                raise RateLimitExceeded("Modal token budget exhausted",
                                         code="llm_token_budget_exhausted")
             requests.append(now)
             tokens.append([now, request_tokens])

@@ -1,7 +1,6 @@
 import asyncio
 
 import httpx
-import pytest
 from sqlalchemy import select
 
 from dividend.api.deps import plan_access_token
@@ -11,24 +10,22 @@ from dividend.main import create_app
 from dividend.models import Maintainer, Session as SessionRecord, SourceResolution, UpstreamProject
 
 
-class RankingLLM:
-    def __init__(self, invalid=False):
-        self.invalid = invalid
-        self.prompt = ""
+class CountingLLM:
+    def __init__(self):
+        self.calls = 0
 
     def structured_call(self, prompt, schema, timeout=30):
-        self.prompt = prompt
-        ids = schema["properties"]["claim_ids"]["items"]["enum"]
-        return {"claim_ids": ["invented"] if self.invalid else list(reversed(ids))}
+        self.calls += 1
+        return {}
 
 
-@pytest.mark.parametrize("invalid", [False, True])
-def test_explanations_use_frozen_evidence_and_groq_cannot_write_claims(tmp_path, invalid):
-    engine = create_database_engine(f"sqlite:///{tmp_path / f'explanations-{invalid}.db'}")
+def test_multi_line_explanations_are_deterministic_without_modal_calls(tmp_path):
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'explanations.db'}")
     factory = create_session_factory(engine)
-    llm = RankingLLM(invalid=invalid)
+    llm = CountingLLM()
     settings = Settings(ADMIN_TOKEN="test-token", PUBLIC_BASE_URL="https://example.test",
-                        PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=True, GROQ_API_KEY="test-key",
+                        PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=True,
+                        MODAL_PROXY_TOKEN_ID="test-id", MODAL_PROXY_TOKEN_SECRET="test-secret",
                         DEMO_SEED_ON_BOOT=False,
                         allocation_policy_path=tmp_path / "allocation_policy.yaml")
     app = create_app(settings, engine=engine, session_factory=factory, llm_provider=llm)
@@ -68,13 +65,12 @@ def test_explanations_use_frozen_evidence_and_groq_cannot_write_claims(tmp_path,
                 response = await client.get(f"/api/plans/{plan_id}/explanations",
                     headers={"X-Plan-Token": plan_access_token("test-token", plan_id)})
                 assert response.status_code == 200, response.text
-                result = response.json()["explanations"][0]
-                assert result["status"] == ("invalid_response_fallback" if invalid else "groq_ordered")
-                assert all(claim["text"] != "invented" for claim in result["claims"])
+                results = response.json()["explanations"]
+                assert len(results) == 7
+                assert all(result["status"] == "disabled" for result in results)
+                result = results[0]
                 assert any("cannot be established" in claim["text"] for claim in result["claims"])
-                assert "private@example.test" not in llm.prompt
-                assert "Private Test Name" not in llm.prompt
-                assert "email" not in llm.prompt.lower()
+                assert llm.calls == 0
                 references = {evidence["id"] for evidence in result["evidence"]}
                 assert all(set(claim["evidence_ids"]).issubset(references | {
                     "MISSING:project-description", "MISSING:contribution-activity"

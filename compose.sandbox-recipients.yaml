@@ -2,6 +2,12 @@ services:
   dividend:
     environment:
       DEMO_SANDBOX_RECIPIENTS_FILE: /run/demo-sandbox-recipients.yaml
+      MODAL_ENDPOINT_URL: ${MODAL_ENDPOINT_URL:-https://asthorat7-pune--ep-deepseek-v4-1-flash-1017-server.us-west.modal.direct/v1}
+      MODAL_MODEL: ${MODAL_MODEL:-deepseek-ai/DeepSeek-V4.1-Flash-1017}
+      MODAL_PROXY_TOKEN_ID: ${MODAL_PROXY_TOKEN_ID:?Set MODAL_PROXY_TOKEN_ID in the ignored .env file}
+      MODAL_PROXY_TOKEN_SECRET: ${MODAL_PROXY_TOKEN_SECRET:?Set MODAL_PROXY_TOKEN_SECRET in the ignored .env file}
+      LLM_LIVE_ENABLED: "true"
+      LLM_KILL_SWITCH: "false"
     volumes:
       - type: bind
         source: ${DEMO_SANDBOX_RECIPIENTS_HOST_PATH:?Set to the user-provided recipient YAML file}

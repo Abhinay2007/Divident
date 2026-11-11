@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { dispatchPayouts, getPlan, getPayouts, reconcilePayouts, retryFailedPayouts, ApiError, type PayoutBatch, type PayoutItem } from './api'
+import { payoutConfirmationMessage, payoutPreviewValid } from './payoutConfirmation.js'
 
 function money(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -64,6 +65,14 @@ export default function Payouts({ planId }: { planId: string }) {
   const currentState = currentStatus(record.state, batches, items)
   const attention = currentState === 'Needs attention'
   const payableRecipients = record.lines.reduce((count, line) => count + (line.maintainers.length || (line.payable_cents > 0 ? 1 : 0)), 0)
+  const payoutRecipients = record.lines.flatMap((line) => line.maintainers.map((maintainer) => ({
+    id: maintainer.maintainer_id,
+    name: maintainer.display_name,
+    project: line.display_name,
+    amount_cents: maintainer.amount_cents,
+  })))
+  const recipientPreviewValid = payoutPreviewValid(record.payable_total_cents, payableRecipients,
+    payoutRecipients)
   const recipientCount = batches.length ? items.length : payableRecipients
   const successful = items.filter((item) => item.status === 'success').length
   const pending = items.filter((item) => item.status === 'pending').length
@@ -92,7 +101,13 @@ export default function Payouts({ planId }: { planId: string }) {
       <p className="allocation-summary-note"><strong>{batches.length ? 'Item counts reflect the latest attempt for each upstream project.' : record.state === 'funded' ? 'Ready to distribute.' : record.state === 'paying' ? 'The plan is marked paying, but no batch details are available.' : 'No payout batch has been created.'}</strong>{!batches.length && record.state !== 'funded' && record.state !== 'paying' && ' Distribution is available after confirmed funding.'}</p>
     </section>
 
-    {record.state === 'funded' && batches.length === 0 && <section className="continue-panel payout-action-panel" aria-labelledby="dispatch-title"><div className="continue-copy"><span className="section-kicker">READY TO DISTRIBUTE</span><h2 id="dispatch-title">Send payable allocations</h2><p>This sends {money(record.payable_total_cents)} to {payableRecipients} opted-in maintainers through the configured payment provider.</p></div><div className="approval-actions"><button className="button button-primary" type="button" disabled={actionsPending} onClick={() => { if (window.confirm(`Send ${money(record.payable_total_cents)} in payouts to ${payableRecipients} opted-in maintainers?`)) dispatch.mutate() }}>{dispatch.isPending ? 'Submitting payouts…' : 'Review and send payouts'}</button></div></section>}
+    {record.state === 'funded' && batches.length === 0 && <section className="continue-panel payout-action-panel" aria-labelledby="dispatch-title"><div className="continue-copy"><span className="section-kicker">READY TO DISTRIBUTE</span><h2 id="dispatch-title">Send payable allocations</h2><p>This sends {money(record.payable_total_cents)} through PayPal Sandbox to the opted-in recipients below. Review the exact split before confirming.</p>
+      {recipientPreviewValid ? <ul className="maintainer-lines">{payoutRecipients.map((item) => <li key={item.id}><span>{item.name} · {item.project}</span><strong>{money(item.amount_cents)}</strong></li>)}</ul> : <p className="form-error" role="alert">The frozen recipient breakdown does not match the payable total. Payout submission is blocked.</p>}
+    </div><div className="approval-actions"><button className="button button-primary" type="button" disabled={actionsPending || dispatch.isSuccess || !recipientPreviewValid} onClick={() => {
+      if (window.confirm(payoutConfirmationMessage(record.payable_total_cents, payoutRecipients))) dispatch.mutate()
+    }}>{dispatch.isPending ? 'Submitting payouts…' : 'Review and send payouts'}</button></div></section>}
+
+    {dispatch.isSuccess && <p className="form-success" role="status">PayPal provider response: batch {dispatch.data.batch_id}; {dispatch.data.item_count} items; status {statusLabel(dispatch.data.state)}.</p>}
 
     {record.state === 'paying' && <section className={`payout-state-note${attention || !batches.length ? ' payout-state-attention' : ''}`} role="status"><strong>{!batches.length ? 'Payout outcome is uncertain.' : attention ? 'Provider outcome needs attention.' : 'Payouts are processing.'}</strong><span>{!batches.length ? 'Do not submit another batch. The API has no batch reference to reconcile yet; refresh status before taking further action.' : attention ? 'Do not submit another batch. Reconcile the existing batch to check provider status.' : 'The latest saved item statuses are shown below. Reconcile to request current provider results.'}</span></section>}
 

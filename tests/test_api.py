@@ -220,7 +220,7 @@ def test_workspace_lists_persisted_sessions_and_plans_without_bypassing_plan_aut
 
 
 def test_llm_kill_switch_overrides_injected_provider(tmp_path):
-    from dividend.llm.groq_provider import GroqProvider
+    from dividend.llm.modal_provider import ModalProvider
 
     engine = create_database_engine(f"sqlite:///{tmp_path / 'kill-switch.db'}")
     factory = create_session_factory(engine)
@@ -230,7 +230,7 @@ def test_llm_kill_switch_overrides_injected_provider(tmp_path):
         allocation_policy_path=tmp_path / "allocation_policy.yaml",
     )
     app = create_app(configured, engine=engine, session_factory=factory,
-                     llm_provider=GroqProvider("unused", "test", client=object()))
+                     llm_provider=ModalProvider("test", client=object()))
     assert app.state.llm is None
     engine.dispose()
 

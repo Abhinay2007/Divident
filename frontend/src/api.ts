@@ -1,4 +1,5 @@
 import { planHeaders } from './planAccess.js'
+import { requestEvidenceReview } from './evidenceReview.js'
 
 export { planHeaders } from './planAccess.js'
 
@@ -128,6 +129,24 @@ export function getPlanExplanations(id: string) {
   return request<{ plan_id: string; explanations: ProjectExplanation[] }>(
     `/api/plans/${encodeURIComponent(id)}/explanations`, { headers: planHeaders(id) },
   )
+}
+
+export type EvidenceReview = {
+  status: 'available' | 'unavailable' | 'invalid'
+  reason?: string | null
+  summary?: string | null
+  contributors?: { contributor_id: string; observation: string; cited_pr_numbers: number[] }[]
+  cited_pr_numbers?: number[]
+  citations?: { pr_number: number; url: string }[]
+  advisory_flags?: string[]
+  proposal_sha256?: string | null
+  model?: string | null
+  prompt_version?: string | null
+  retry_after_seconds?: number | null
+}
+
+export function getPlanEvidenceReview(id: string) {
+  return requestEvidenceReview(id, planHeaders(id), request<EvidenceReview>)
 }
 
 export class ApiError extends Error {

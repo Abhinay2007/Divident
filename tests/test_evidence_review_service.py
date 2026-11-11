@@ -11,8 +11,8 @@ from dividend.config import Settings
 from dividend.api.deps import plan_access_token
 from dividend.db import create_database_engine, create_session_factory, initialize_database
 from dividend.errors import LLMProviderError, RateLimitExceeded
-from dividend.llm.groq_provider import GroqProvider
-from dividend.llm.limits import GroqRequestBudget
+from dividend.llm.modal_provider import ModalProvider
+from dividend.llm.limits import ModalRequestBudget
 from dividend.models import LLMCache, Maintainer, Plan, PlanLine, Session
 from dividend.main import create_app
 from dividend.services.approval_proposal import freeze_proposal
@@ -80,7 +80,36 @@ def valid_summary():
             "advisory_flags": ["merged_pr_activity", "review_activity", "multiple_pr_evidence"]}
 
 
-class FakeGroq:
+def test_realistic_multi_project_output_validates_all_contributors_and_citations():
+    contributors = {
+        "123": {"contributor_id": "123", "merged_pr_numbers": [11],
+            "reviewed_pr_numbers": [14], "evidence_references": [
+                {"pr_number": 11, "url": "https://github.com/alpha/engine/pull/11"},
+                {"pr_number": 14, "url": "https://github.com/alpha/engine/pull/14"},
+            ]},
+        "456": {"contributor_id": "456", "merged_pr_numbers": [],
+            "reviewed_pr_numbers": [20], "evidence_references": [
+                {"pr_number": 20, "url": "https://github.com/beta/tool/pull/20"},
+            ]},
+    }
+    raw = {
+        "summary": "Contributor 123 merged PR #11 and reviewed PR #14; contributor 456 reviewed PR #20.",
+        "contributors": [
+            {"contributor_id": "123", "observation": "Merged PR #11 and reviewed PR #14.",
+             "cited_pr_numbers": [11, 14]},
+            {"contributor_id": "456", "observation": "Reviewed PR #20.",
+             "cited_pr_numbers": [20]},
+        ],
+        "cited_pr_numbers": [11, 14, 20],
+        "advisory_flags": ["merged_pr_activity", "review_activity", "multiple_pr_evidence"],
+    }
+    result = EvidenceReviewService._validate(raw, contributors, "proposal-hash")
+    assert result["status"] == "available"
+    assert [row["contributor_id"] for row in result["contributors"]] == ["123", "456"]
+    assert [row["pr_number"] for row in result["citations"]] == [11, 14, 20]
+
+
+class FakeModal:
     def __init__(self, result=None, error=None, delay=0):
         self.result = result or valid_summary()
         self.error = error
@@ -100,7 +129,7 @@ class FakeGroq:
 
 def test_cached_summary_and_financial_data_are_unchanged(evidence_db):
     plan_id = make_plan(evidence_db)
-    provider = FakeGroq()
+    provider = FakeModal()
     service = EvidenceReviewService(evidence_db, provider)
     with evidence_db() as db:
         plan = db.get(Plan, plan_id)
@@ -112,8 +141,16 @@ def test_cached_summary_and_financial_data_are_unchanged(evidence_db):
         second = service.review(plan_id, db)
         assert first == second
         assert first["status"] == "available"
+        assert first["citations"] == [
+            {"pr_number": 1, "url": "https://github.com/curl/curl/pull/1"},
+            {"pr_number": 2, "url": "https://github.com/curl/curl/pull/2"},
+        ]
         assert provider.request_count == 1
         assert "9001" in provider.calls[0][0]
+        assert '"merged"' in provider.calls[0][0]
+        assert ('Supported advisory flags: ["merged_pr_activity","multiple_pr_evidence",'
+                '"review_activity"]') in provider.calls[0][0]
+        assert "merged_pr_numbers" not in provider.calls[0][0]
         assert "100" not in provider.calls[0][0]  # No allocation cents in the prompt.
         assert "email" not in provider.calls[0][0].lower()
         assert plan.fee_policy_snapshot == snapshot
@@ -121,9 +158,25 @@ def test_cached_summary_and_financial_data_are_unchanged(evidence_db):
                 line.payable_cents, line.reserved_cents) == financials
 
 
+def test_oversized_evidence_returns_budget_error_without_modal_call(evidence_db):
+    plan_id = make_plan(evidence_db)
+    with evidence_db.begin() as db:
+        plan = db.get(Plan, plan_id)
+        proposal = plan.fee_policy_snapshot["approval_proposal"]["snapshot"]
+        proposal["projects"][0]["evidence"][0]["source_url"] += "?context=" + " context for review" * 1500
+        plan.fee_policy_snapshot = {**plan.fee_policy_snapshot,
+                                    "approval_proposal": freeze_proposal(proposal)}
+    provider = FakeModal()
+    with evidence_db() as db:
+        result = EvidenceReviewService(evidence_db, provider).review(plan_id, db)
+    assert result["status"] == "unavailable"
+    assert result["reason"] == "input_token_budget_exceeded"
+    assert provider.request_count == 0
+
+
 def test_changed_proposal_hash_misses_cache(evidence_db):
     plan_id = make_plan(evidence_db)
-    provider = FakeGroq()
+    provider = FakeModal()
     service = EvidenceReviewService(evidence_db, provider)
     with evidence_db() as db:
         service.review(plan_id, db)
@@ -139,9 +192,9 @@ def test_changed_proposal_hash_misses_cache(evidence_db):
     assert provider.request_count == 2
 
 
-def test_same_proposal_concurrent_misses_share_one_groq_call(evidence_db):
+def test_same_proposal_concurrent_misses_share_one_modal_call(evidence_db):
     plan_id = make_plan(evidence_db)
-    provider = FakeGroq(delay=0.05)
+    provider = FakeModal(delay=0.05)
     service = EvidenceReviewService(evidence_db, provider)
     def review():
         with evidence_db() as db:
@@ -159,7 +212,7 @@ def test_same_proposal_concurrent_misses_share_one_groq_call(evidence_db):
     {"requests": [], "tokens": [[time.time(), 198500]]},
 ])
 def test_rpm_rpd_tpm_and_tpd_guards_skip_provider(evidence_db, state):
-    budget = GroqRequestBudget(evidence_db)
+    budget = ModalRequestBudget(evidence_db)
     with evidence_db.begin() as db:
         db.add(LLMCache(key=budget.KEY, response=state))
     with pytest.raises(RateLimitExceeded):
@@ -167,7 +220,7 @@ def test_rpm_rpd_tpm_and_tpd_guards_skip_provider(evidence_db, state):
 
 
 def test_exhausted_budget_prevents_provider_call(evidence_db):
-    budget = GroqRequestBudget(evidence_db)
+    budget = ModalRequestBudget(evidence_db)
     with evidence_db.begin() as db:
         db.add(LLMCache(key=budget.KEY, response={
             "requests": [time.time()] * 2, "tokens": [],
@@ -178,14 +231,13 @@ def test_exhausted_budget_prevents_provider_call(evidence_db):
     completions = Completions()
     client = type("Client", (), {"chat": type("Chat", (), {
         "completions": completions})()})()
-    provider = GroqProvider("secret", "model", client, budget=budget)
+    provider = ModalProvider("model", client, budget=budget)
     with pytest.raises(RateLimitExceeded):
         provider.structured_call("brief", {"type": "object"})
     assert completions.calls == 0
 
 
-def test_provider_429_respects_retry_after_and_retries_once():
-    pauses = []
+def test_provider_rate_limit_is_reported_without_retry():
     rate_limited = type("RateLimitError", (Exception,), {
         "status_code": 429,
         "response": type("Response", (), {"headers": {"retry-after": "7"}})(),
@@ -198,13 +250,11 @@ def test_provider_429_respects_retry_after_and_retries_once():
     completions = Completions()
     client = type("Client", (), {"chat": type("Chat", (), {
         "completions": completions})()})()
-    provider = GroqProvider("secret", "openai/gpt-oss-20b", client,
-                             sleep=pauses.append, jitter=lambda low, high: 1)
+    provider = ModalProvider("deepseek-ai/DeepSeek-V4.1-Flash-1017", client)
     with pytest.raises(RateLimitExceeded) as error:
         provider.structured_call("brief", {"type": "object"})
-    assert pauses == [7.0]
-    assert completions.calls == provider.request_count == 2
-    assert error.value.retry_after_seconds == 7
+    assert completions.calls == provider.request_count == 1
+    assert error.value.code == "modal_rate_limited"
 
 
 def test_permanent_provider_error_is_not_retried():
@@ -217,7 +267,7 @@ def test_permanent_provider_error_is_not_retried():
     completions = Completions()
     client = type("Client", (), {"chat": type("Chat", (), {
         "completions": completions})()})()
-    provider = GroqProvider("secret", "model", client, sleep=lambda _: None)
+    provider = ModalProvider("model", client)
     with pytest.raises(LLMProviderError):
         provider.structured_call("brief", {"type": "object"})
     assert completions.calls == 1
@@ -233,7 +283,7 @@ def test_permanent_http_errors_are_not_retried(status):
             raise error("secret")
     calls = Completions()
     sdk = type("Client", (), {"chat": type("Chat", (), {"completions": calls})()})()
-    provider = GroqProvider("secret", "model", sdk, sleep=lambda _: None)
+    provider = ModalProvider("model", sdk)
     with pytest.raises(LLMProviderError):
         provider.structured_call("facts", {"type": "object"})
     assert calls.calls == 1
@@ -241,6 +291,7 @@ def test_permanent_http_errors_are_not_retried(status):
 
 @pytest.mark.parametrize("change", [
     lambda data: data["contributors"][0].update(cited_pr_numbers=[999]),
+    lambda data: data["contributors"][0].update(cited_pr_numbers=[1, 1]),
     lambda data: data["advisory_flags"].append("docs_only_pattern"),
     lambda data: data.update(summary="Contributor worked on PR #999."),
     lambda data: data.update(summary="Evidence shows a docs-only pattern."),
@@ -249,7 +300,7 @@ def test_invalid_citations_and_flags_are_rejected_and_not_cached(evidence_db, ch
     plan_id = make_plan(evidence_db)
     output = valid_summary()
     change(output)
-    provider = FakeGroq(result=output)
+    provider = FakeModal(result=output)
     service = EvidenceReviewService(evidence_db, provider)
     with evidence_db() as db:
         result = service.review(plan_id, db)
@@ -259,21 +310,118 @@ def test_invalid_citations_and_flags_are_rejected_and_not_cached(evidence_db, ch
     assert provider.request_count == 2
 
 
+@pytest.mark.parametrize(("change", "field", "reason"), [
+    (lambda data: data["contributors"][0].update(contributor_id="unknown-id"),
+     "contributors[].contributor_id", "unknown_contributor_id"),
+    (lambda data: (data["contributors"][0].update(cited_pr_numbers=[999]),
+                   data.update(cited_pr_numbers=[999])),
+     "contributors[].cited_pr_numbers", "citation_not_in_evidence"),
+])
+def test_invalid_model_evidence_reports_field_and_reason_without_logging_payload(
+        evidence_db, caplog, change, field, reason):
+    import logging
+
+    plan_id = make_plan(evidence_db)
+    output = valid_summary()
+    change(output)
+    provider = FakeModal(result=output)
+    caplog.set_level(logging.WARNING)
+    with evidence_db() as db:
+        response = EvidenceReviewService(evidence_db, provider).review(plan_id, db)
+    assert response["status"] == "invalid"
+    assert f"validation_field={field}" in caplog.text
+    assert f"validation_reason={reason}" in caplog.text
+    assert "unknown-id" not in caplog.text
+    assert "Summarize these GitHub contributions" not in caplog.text
+
+
+def test_model_json_parse_failure_is_logged_by_field_and_reason(evidence_db, caplog):
+    import logging
+
+    plan_id = make_plan(evidence_db)
+
+    class MalformedModal:
+        def structured_call(self, *args, **kwargs):
+            from dividend.errors import LLMSchemaViolation
+            raise LLMSchemaViolation(
+                "Malformed structured response", code="llm_schema_violation",
+                detail={"field": "content", "reason": "malformed_json"},
+            )
+
+    caplog.set_level(logging.WARNING)
+    with evidence_db() as db:
+        result = EvidenceReviewService(evidence_db, MalformedModal()).review(plan_id, db)
+    assert result["status"] == "invalid"
+    assert "validation_field=content" in caplog.text
+    assert "validation_reason=malformed_json" in caplog.text
+
+
 def test_provider_unavailable_returns_explicit_status(evidence_db):
     plan_id = make_plan(evidence_db)
-    service = EvidenceReviewService(evidence_db, FakeGroq(error=LLMProviderError(
-        "unavailable", code="llm_provider_unavailable")))
+    service = EvidenceReviewService(evidence_db, FakeModal(error=LLMProviderError(
+        "unavailable", code="modal_endpoint_unavailable")))
     with evidence_db() as db:
-        assert service.review(plan_id, db)["reason"] == "groq_unavailable"
+        assert service.review(plan_id, db)["reason"] == "modal_endpoint_unavailable"
+
+
+def test_disabled_modal_provider_returns_explicit_status(evidence_db):
+    plan_id = make_plan(evidence_db)
+    with evidence_db() as db:
+        result = EvidenceReviewService(evidence_db).review(plan_id, db)
+    assert result["reason"] == "modal_disabled"
+
+
+def test_request_budget_failure_logs_safe_diagnostics(evidence_db, caplog):
+    import logging
+
+    plan_id = make_plan(evidence_db)
+    budget = ModalRequestBudget(evidence_db)
+    with evidence_db.begin() as db:
+        db.add(LLMCache(key=budget.KEY, response={
+            "requests": [time.time()] * 2, "tokens": [],
+        }))
+    class Completions:
+        calls = 0
+        def create(self, **kwargs): self.calls += 1
+    completions = Completions()
+    client = type("Client", (), {"chat": type("Chat", (), {
+        "completions": completions})()})()
+    provider = ModalProvider("deepseek-ai/DeepSeek-V4.1-Flash-1017", client, budget=budget)
+    caplog.set_level(logging.WARNING)
+    with evidence_db() as db:
+        result = EvidenceReviewService(evidence_db, provider).review(plan_id, db)
+    assert result["reason"] == "llm_request_budget_exhausted"
+    assert completions.calls == 0
+    assert "guard=requests_per_minute" in caplog.text
+    assert "error_type=RateLimitExceeded" in caplog.text
+    assert "provider=ModalProvider" in caplog.text
+    assert "model=deepseek-ai/DeepSeek-V4.1-Flash-1017" in caplog.text
+    assert "input_tokens=" in caplog.text
+    assert "secret" not in caplog.text
+    assert "Summarize these GitHub contributions" not in caplog.text
+
+
+def test_cited_pull_request_without_a_verified_github_url_is_rejected(evidence_db):
+    plan_id = make_plan(evidence_db)
+    with evidence_db.begin() as db:
+        plan = db.get(Plan, plan_id)
+        proposal = plan.fee_policy_snapshot["approval_proposal"]["snapshot"]
+        proposal["projects"][0]["evidence"][0]["source_url"] = "https://evil.example/pull/1"
+        plan.fee_policy_snapshot = {**plan.fee_policy_snapshot,
+                                    "approval_proposal": freeze_proposal(proposal)}
+    service = EvidenceReviewService(evidence_db, FakeModal())
+    with evidence_db() as db:
+        assert service.review(plan_id, db)["status"] == "invalid"
 
 
 def test_plan_evidence_review_route_is_plan_token_guarded(evidence_db):
     plan_id = make_plan(evidence_db)
     engine = evidence_db.kw["bind"]
+    provider = FakeModal()
     app = create_app(Settings(ADMIN_TOKEN="test-token", PUBLIC_BASE_URL="https://example.test",
-        PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=True, GROQ_API_KEY="test-key",
+        PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=True, MODAL_PROXY_TOKEN_ID="test-id", MODAL_PROXY_TOKEN_SECRET="test-secret",
         DEMO_SEED_ON_BOOT=False), engine=engine, session_factory=evidence_db,
-        llm_provider=FakeGroq())
+        llm_provider=provider)
     async def exercise():
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
@@ -281,18 +429,36 @@ def test_plan_evidence_review_route_is_plan_token_guarded(evidence_db):
                 path = f"/api/plans/{plan_id}/evidence-review"
                 denied = await client.get(path)
                 assert denied.status_code == 401
-                response = await client.get(path, headers={
-                    "X-Plan-Token": plan_access_token("test-token", plan_id),
-                })
+                headers = {"X-Plan-Token": plan_access_token("test-token", plan_id)}
+                response = await client.get(path, headers=headers)
                 assert response.status_code == 200
                 assert response.json()["status"] == "available"
+                assert provider.request_count == 1
     asyncio.run(exercise())
+
+
+def test_app_builds_live_modal_provider_with_existing_request_budget(evidence_db, monkeypatch):
+    monkeypatch.setenv("MODAL_ENDPOINT_URL", "https://modal.test/v1")
+    monkeypatch.setenv("MODAL_PROXY_TOKEN_ID", "test-id")
+    monkeypatch.setenv("MODAL_PROXY_TOKEN_SECRET", "test-secret")
+    app = create_app(Settings(
+        ADMIN_TOKEN="test-token", PUBLIC_BASE_URL="https://example.test",
+        PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=True,
+        LLM_KILL_SWITCH=False, MODAL_PROXY_TOKEN_ID="test-id",
+        MODAL_PROXY_TOKEN_SECRET="test-secret", DEMO_SEED_ON_BOOT=False,
+    ), engine=evidence_db.kw["bind"], session_factory=evidence_db)
+    try:
+        assert isinstance(app.state.llm, ModalProvider)
+        assert app.state.evidence_review_service.provider is app.state.llm
+        assert app.state.llm.budget is not None
+    finally:
+        app.state.llm.close()
 
 
 def test_model_default_is_configurable():
     settings = Settings(ADMIN_TOKEN="admin", PUBLIC_BASE_URL="https://example.test",
                         PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=False)
-    assert settings.LLM_MODEL == "openai/gpt-oss-20b"
+    assert settings.MODAL_MODEL == "deepseek-ai/DeepSeek-V4.1-Flash-1017"
     assert Settings(ADMIN_TOKEN="admin", PUBLIC_BASE_URL="https://example.test",
                     PAYMENTS_MODE="fake", LLM_LIVE_ENABLED=False,
-                    LLM_MODEL="custom/groq-model").LLM_MODEL == "custom/groq-model"
+                    MODAL_MODEL="custom/modal-model").MODAL_MODEL == "custom/modal-model"

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { adjustPlanBudget, approvePlan, getPlan, getPlanExplanations, getProjects, ApiError, type Plan, type Project } from './api'
+import { adjustPlanBudget, approvePlan, getPlan, getPlanEvidenceReview, getPlanExplanations, getProjects, ApiError, type Plan, type Project } from './api'
+import { evidenceReviewPresentation } from './evidenceReview.js'
 
 function money(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -59,6 +60,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
     queryFn: () => getPlanExplanations(planId),
     enabled: !!plan.data,
   })
+  const evidenceReview = useMutation({ mutationFn: () => getPlanEvidenceReview(planId) })
   const adjust = useMutation({
     mutationFn: ({ cents, date }: { cents: number; date: string }) => adjustPlanBudget(planId, cents, date),
     onSuccess: (updated) => {
@@ -82,6 +84,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
   const approvalUnavailable = record.charge_cents === null || record.est_payout_fees_cents === null
   const approvalResult = approve.data
   const currentBudget = budgetDraft ?? (record.budget_cents / 100).toFixed(2)
+  const aiReview = evidenceReviewPresentation(evidenceReview.data)
 
   function submitBudget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -129,12 +132,30 @@ export default function AllocationReview({ planId }: { planId: string }) {
       </div>}
     </section>
 
+    <section className="source-section" aria-labelledby="ai-evidence-review-title">
+      <div className="source-section-heading"><div><span className="section-kicker">OPTIONAL MODAL REVIEW</span><h2 id="ai-evidence-review-title">AI Evidence Review</h2><p>Modal summarizes frozen contribution evidence. It cannot change deterministic allocations or payment amounts.</p></div>
+        <button className="button button-secondary" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>{evidenceReview.isPending ? 'Reviewing evidence…' : 'Run AI Evidence Review'}</button></div>
+      {evidenceReview.isError && <ErrorMessage error={evidenceReview.error} retry={() => evidenceReview.mutate()}/>}
+      {aiReview?.status === 'unavailable' && <div className="quiet-card" role="status"><strong>AI review unavailable</strong><p>{aiReview.reason?.replaceAll('_', ' ') ?? 'Modal could not review this proposal.'}</p><button className="text-button" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>Try again</button></div>}
+      {aiReview?.status === 'invalid' && <div className="discovery-error" role="status"><strong>AI response not shown</strong><p>The response did not pass evidence citation validation{aiReview.reason ? ` (${aiReview.reason.replaceAll('_', ' ')}).` : '.'} No unsupported findings were displayed.</p><button className="text-button" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>Try again</button></div>}
+      {aiReview?.status === 'available' && <article className="explanation-card ai-evidence-review" aria-label="Modal-generated evidence review">
+        <div className="explanation-head"><h3>Modal evidence summary</h3><span className="method-label">AI-generated · {aiReview.model}</span></div>
+        <p>{aiReview.summary}</p>
+        <h4>Evidence-based findings</h4>
+        <ul className="explanation-claims">{aiReview.contributors?.map((finding) => <li key={finding.contributor_id}><strong>Contributor {finding.contributor_id}</strong><p>{finding.observation}</p>
+          {finding.cited_pr_numbers.length > 0 && <p>Cited PRs: {finding.cited_pr_numbers.map((number) => `#${number}`).join(', ')}</p>}</li>)}</ul>
+        <h4>GitHub sources</h4>
+        {aiReview.citations.length > 0 ? <ul>{aiReview.citations.map((citation) => <li key={`${citation.pr_number}-${citation.url}`}><a href={citation.url} target="_blank" rel="noreferrer">PR #{citation.pr_number} ↗<span className="sr-only"> (opens in a new tab)</span></a></li>)}</ul> : <p>No verified GitHub links were returned.</p>}
+        {aiReview.advisoryFlags.length > 0 && <p className="muted-label">Signals: {aiReview.advisoryFlags.map((flag) => flag.replaceAll('_', ' ')).join(' · ')}</p>}
+      </article>}
+    </section>
+
     <section className="source-section" aria-labelledby="why-funded-title">
-      <div className="source-section-heading"><div><span className="section-kicker">EVIDENCE REVIEW</span><h2 id="why-funded-title">Why this project is funded</h2></div><span className="row-count">One explanation per line</span></div>
+      <div className="source-section-heading"><div><span className="section-kicker">DETERMINISTIC ALLOCATION</span><h2 id="why-funded-title">Why this project is funded</h2><p>These server-authored explanations describe the allocation rules and remain separate from the optional AI review.</p></div><span className="row-count">One explanation per line</span></div>
       {explanations.isPending && <div className="skeleton table-skeleton" aria-label="Preparing evidence explanations"/>}
       {explanations.isError && <ErrorMessage error={explanations.error} retry={() => { void explanations.refetch() }}/>}
       {explanations.data?.explanations.map((item) => <article className="explanation-card" key={item.upstream_key}>
-        <div className="explanation-head"><h3>{item.upstream_key}</h3><span className="method-label">{item.status === 'groq_ordered' ? 'Groq ranked evidence · server-authored claims' : item.status === 'disabled' ? 'Deterministic explanation' : 'Deterministic fallback'}</span></div>
+        <div className="explanation-head"><h3>{item.upstream_key}</h3><span className="method-label">{item.status === 'disabled' ? 'Deterministic explanation' : 'Deterministic fallback'}</span></div>
         <ul className="explanation-claims">{item.claims.map((claim) => <li key={claim.id}><p>{claim.text}</p><div className="claim-refs">Evidence: {claim.evidence_ids.map((id) => <code key={id}>{id}</code>)}</div></li>)}</ul>
         <details className="signal-details"><summary>Inspect supporting evidence</summary><div className="evidence-source-list">{item.evidence.map((evidence) => <div className="evidence-source" key={evidence.id}><strong>{evidence.id}</strong><code>{JSON.stringify(evidence)}</code></div>)}</div></details>
       </article>)}

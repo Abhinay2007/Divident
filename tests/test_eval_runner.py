@@ -18,4 +18,4 @@ def test_offline_evaluation_is_reproducible_and_labels_come_from_fixture():
     assert result["validation_rejections"] == 6
     assert result["llm_calls"] == 3
     assert result["cache_lookups"] == 2 and result["cache_hit_rate"] == 0
-    assert "No live Groq run" in " ".join(result["limitations"])
+    assert "No live model run" in " ".join(result["limitations"])

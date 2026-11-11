@@ -84,10 +84,10 @@ async def get_plan(plan_id: str, db: DbSession = Depends(get_db), _: None = Depe
 
 @router.get("/plans/{plan_id}/explanations", response_model=ExplanationsResponse)
 async def get_plan_explanations(
-    plan_id: str, request: Request, db: DbSession = Depends(get_db),
+    plan_id: str, db: DbSession = Depends(get_db),
     _: None = Depends(require_plan_access),
 ):
-    return ExplanationService.get_plan_explanations(db, plan_id, request.app.state.llm)
+    return ExplanationService.get_plan_explanations(db, plan_id)
 
 
 @router.get("/plans/{plan_id}/evidence-review", response_model=EvidenceReviewResponse)

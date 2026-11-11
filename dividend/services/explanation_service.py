@@ -1,6 +1,4 @@
-"""Evidence-backed explanations over immutable plan snapshots."""
-
-import json
+"""Deterministic evidence-backed explanations over immutable plan snapshots."""
 
 from sqlalchemy.orm import Session as DbSession
 
@@ -10,17 +8,11 @@ from ..models import Session as SessionRecord
 from .plan_service import PlanService
 
 
-_SCHEMA = lambda ids: {"type": "object", "properties": {
-    "claim_ids": {"type": "array", "items": {"type": "string", "enum": ids},
-                     "uniqueItems": True},
-}, "required": ["claim_ids"], "additionalProperties": False}
-
-
 class ExplanationService:
-    """Groq may order evidence claims; only server-authored claims reach users."""
+    """Build server-authored explanations without external model calls."""
 
     @staticmethod
-    def get_plan_explanations(db: DbSession, plan_id: str, llm=None) -> dict:
+    def get_plan_explanations(db: DbSession, plan_id: str) -> dict:
         plan = PlanService.get(db, plan_id)
         session = db.get(SessionRecord, plan.session_id)
         if session is None:
@@ -28,30 +20,10 @@ class ExplanationService:
         explanations = []
         for line in plan.lines:
             claims, evidence = ExplanationService._claims(line, session.source_binaries or {})
-            ordered_ids: list[str] = []
-            status = "disabled"
-            if llm is not None:
-                prompt = "Select and order claim IDs that best explain this frozen allocation. " \
-                         "Return only IDs from the supplied claims. Do not add or rewrite claims.\n" \
-                         + json.dumps(claims, sort_keys=True, separators=(",", ":"))
-                try:
-                    result = llm.structured_call(prompt, _SCHEMA([item["id"] for item in claims]), timeout=20)
-                    selected = result.get("claim_ids") if type(result) is dict else None
-                    if (type(selected) is list and len(selected) == len(set(selected))
-                            and all(value in {item["id"] for item in claims} for value in selected)):
-                        ordered_ids = selected
-                        status = "groq_ordered"
-                    else:
-                        status = "invalid_response_fallback"
-                except Exception:
-                    status = "unavailable_fallback"
-            by_id = {item["id"]: item for item in claims}
-            order = ordered_ids + [item["id"] for item in claims if item["id"] not in ordered_ids]
             explanations.append({
                 "upstream_key": line.upstream_key,
-                "status": status,
-                "claims": [{**by_id[claim_id], "text": by_id[claim_id]["text"]}
-                           for claim_id in order],
+                "status": "disabled",
+                "claims": claims,
                 "evidence": evidence,
             })
         return {"plan_id": plan.id, "explanations": explanations}
