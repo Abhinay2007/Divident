@@ -29,7 +29,7 @@ include = ["dividend", "dividend.*"]
 exclude = ["day1", "day1.*", "data", "data.*", "tests", "tests.*"]
 
 [tool.setuptools.package-data]
-dividend = ["data/*.tsv", "data/*.json"]
+dividend = ["data/*.tsv", "data/*.json", "data/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

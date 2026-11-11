@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { adjustPlanBudget, approvePlan, getPlan, getPlanEvidenceReview, getPlanExplanations, getProjects, ApiError, type Plan, type Project } from './api'
 import { evidenceReviewPresentation } from './evidenceReview.js'
+import { approvalUnavailableReason } from './paymentConfirmation.js'
+import SyntheticDemoBanner from './SyntheticDemoBanner'
 
 function money(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -53,7 +55,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
   const projects = useQuery({
     queryKey: ['projects', plan.data?.session_id],
     queryFn: () => getProjects(plan.data!.session_id),
-    enabled: !!plan.data,
+    enabled: !!plan.data && !plan.data.synthetic_demo,
   })
   const explanations = useQuery({
     queryKey: ['explanations', planId],
@@ -81,7 +83,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
   const record = plan.data
   const projectByKey = new Map((projects.data?.projects ?? []).map((project) => [project.upstream_key, project]))
   const isDraft = record.state === 'draft'
-  const approvalUnavailable = record.charge_cents === null || record.est_payout_fees_cents === null
+  const approvalUnavailable = approvalUnavailableReason(record)
   const approvalResult = approve.data
   const currentBudget = budgetDraft ?? (record.budget_cents / 100).toFixed(2)
   const aiReview = evidenceReviewPresentation(evidenceReview.data)
@@ -98,6 +100,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
 
   return <section className="discovery-page allocation-review">
     <a className="back-link" href={`/discovery/${record.session_id}`}>← Package discovery</a>
+    {record.synthetic_demo && <SyntheticDemoBanner/>}
     <div className="discovery-heading discovery-heading-session">
       <div><div className="eyebrow">ALLOCATION REVIEW</div><h1>Review the funding plan.</h1><p>Inspect each project’s share, eligibility, and the signals behind the allocation before requesting PayPal approval.</p></div>
       <span className={`status-pill ${isDraft ? 'status-draft' : `status-${record.state}`}`}><span/>{isDraft ? 'Draft · not approved' : stateLabel(record.state)}</span>
@@ -105,17 +108,14 @@ export default function AllocationReview({ planId }: { planId: string }) {
 
     <section className="session-panel allocation-summary" aria-labelledby="funding-summary-title">
       <div className="session-panel-head"><div><span className="section-kicker">FUNDING OVERVIEW</span><h2 id="funding-summary-title">Plan summary</h2></div><code className="session-id">{record.id}</code></div>
-      <div className="session-stats allocation-stats">
-        <Summary label="Funding budget" value={money(record.budget_cents)}/>
-        <Summary label="Payable allocations" value={money(record.payable_total_cents)}/>
-        <Summary label="Reserved" value={money(record.reserved_total_cents)}/>
-        <Summary label="Upstream projects" value={record.lines.length.toLocaleString()}/>
-        <Summary label="Incoming fee" value={record.est_incoming_fee_cents === null ? 'Unknown' : `Est. ${money(record.est_incoming_fee_cents)}`}/>
-        <Summary label="Payout fees" value={record.est_payout_fees_cents === null ? 'Unknown' : `Est. ${money(record.est_payout_fees_cents)}`}/>
+      <div className="money-summary" aria-label="Plan money summary">
+        <Summary label="Charged now" value={record.money_summary.charged_now_cents === null ? 'Not charged' : money(record.money_summary.charged_now_cents)}/>
+        <Summary label="Pledged, not charged" value={money(record.money_summary.pledged_cents)}/>
+        <Summary label="PayPal fee estimate" value={record.money_summary.fee_estimate_cents === null ? 'Unavailable' : money(record.money_summary.fee_estimate_cents)}/>
       </div>
-      <p className="allocation-summary-note"><strong>{record.money_summary.charged_now_cents === null ? 'Not charged' : `${money(record.money_summary.charged_now_cents)} charged`}</strong>
-        {record.est_payout_fees_cents === null ? ' A supported US recipient and fee scope are required before the estimates and funding charge are available.' : ` Fee estimates use ${record.fee_policy_version}; actual fees come from PayPal responses.`}
-        {isDraft && ' This plan remains a draft until you request approval.'}
+      <p className="allocation-summary-note"><span>Budget <strong>{money(record.budget_cents)}</strong></span><span>Payable <strong>{money(record.payable_total_cents)}</strong></span><span>Reserved <strong>{money(record.reserved_total_cents)}</strong></span><span>{record.lines.length.toLocaleString()} projects</span></p>
+      <p className="allocation-summary-note allocation-summary-detail"><strong>{isDraft ? 'Draft · no order has been created.' : `Plan state: ${stateLabel(record.state)}.`}</strong>
+        {record.est_payout_fees_cents === null ? ' A supported recipient and measured fee scope are required before funding is available.' : ` Estimates use ${record.fee_policy_version}; actual fees come from PayPal responses.`}
       </p>
     </section>
 
@@ -132,7 +132,7 @@ export default function AllocationReview({ planId }: { planId: string }) {
       </div>}
     </section>
 
-    <section className="source-section" aria-labelledby="ai-evidence-review-title">
+    {!record.synthetic_demo && <section className="source-section" aria-labelledby="ai-evidence-review-title">
       <div className="source-section-heading"><div><span className="section-kicker">OPTIONAL MODAL REVIEW</span><h2 id="ai-evidence-review-title">AI Evidence Review</h2><p>Modal summarizes frozen contribution evidence. It cannot change deterministic allocations or payment amounts.</p></div>
         <button className="button button-secondary" type="button" disabled={evidenceReview.isPending} onClick={() => evidenceReview.mutate()}>{evidenceReview.isPending ? 'Reviewing evidence…' : 'Run AI Evidence Review'}</button></div>
       {evidenceReview.isError && <ErrorMessage error={evidenceReview.error} retry={() => evidenceReview.mutate()}/>}
@@ -158,9 +158,9 @@ export default function AllocationReview({ planId }: { planId: string }) {
         </section>)}
         {aiReview.advisoryFlags.length > 0 && <p className="muted-label">Signals: {aiReview.advisoryFlags.map((flag) => flag.replaceAll('_', ' ')).join(' · ')}</p>}
       </article>}
-    </section>
+    </section>}
 
-    <section className="source-section" aria-labelledby="why-funded-title">
+    {!record.synthetic_demo && <section className="source-section" aria-labelledby="why-funded-title">
       <div className="source-section-heading"><div><span className="section-kicker">DETERMINISTIC ALLOCATION</span><h2 id="why-funded-title">Why this project is funded</h2><p>These server-authored explanations describe the allocation rules and remain separate from the optional AI review.</p></div><span className="row-count">One explanation per line</span></div>
       {explanations.isPending && <div className="skeleton table-skeleton" aria-label="Preparing evidence explanations"/>}
       {explanations.isError && <ErrorMessage error={explanations.error} retry={() => { void explanations.refetch() }}/>}
@@ -169,9 +169,9 @@ export default function AllocationReview({ planId }: { planId: string }) {
         <ul className="explanation-claims">{item.claims.map((claim) => <li key={claim.id}><p>{claim.text}</p><div className="claim-refs">Evidence: {claim.evidence_ids.map((id) => <code key={id}>{id}</code>)}</div></li>)}</ul>
         <details className="signal-details"><summary>Inspect supporting evidence</summary><div className="evidence-source-list">{item.evidence.map((evidence) => <div className="evidence-source" key={evidence.id}><strong>{evidence.id}</strong><code>{JSON.stringify(evidence)}</code></div>)}</div></details>
       </article>)}
-    </section>
+    </section>}
 
-    {isDraft && <section className="continue-panel allocation-actions" aria-labelledby="adjust-budget-title">
+    {isDraft && !record.synthetic_demo && <section className="continue-panel allocation-actions" aria-labelledby="adjust-budget-title">
       <div className="continue-copy"><span className="section-kicker">PLAN CONTROLS</span><h2 id="adjust-budget-title">Adjust the budget</h2><p>Changing the budget recalculates project amounts using the same deterministic allocation rules.</p></div>
       <form className="budget-adjust-form" onSubmit={submitBudget}>
         <label>Funding budget (USD)<input required name="budget-usd" autoComplete="off" inputMode="decimal" type="number" min="1" max="10000" step="0.01" value={currentBudget} disabled={adjust.isPending || approve.isPending} onChange={(event) => setBudgetDraft(event.target.value)}/></label>
@@ -191,7 +191,8 @@ export default function AllocationReview({ planId }: { planId: string }) {
         <p>{isDraft ? 'This request creates a PayPal order only when the required fee inputs are available. It does not capture funds or start maintainer payouts.' : 'A funding order is not the same as captured funds. Capture and payouts are handled in later steps.'}</p>
       </div>
       <div className="approval-actions">
-        {isDraft && <button className="button button-primary" type="button" disabled={approve.isPending || adjust.isPending || approvalUnavailable} title={approvalUnavailable ? 'Approval requires measured payment fee inputs.' : undefined} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking approval…' : adjust.isPending ? 'Updating plan…' : approvalUnavailable ? 'Approval unavailable · fees unmeasured' : 'Request PayPal approval'}{!approvalUnavailable && <span aria-hidden="true">→</span>}</button>}
+        {isDraft && <button className="button button-primary" type="button" disabled={approve.isPending || adjust.isPending || !!approvalUnavailable} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking approval…' : adjust.isPending ? 'Updating plan…' : approvalUnavailable ? 'Approval unavailable' : 'Request PayPal approval'}{!approvalUnavailable && <span aria-hidden="true">→</span>}</button>}
+        {isDraft && approvalUnavailable && <p className="funding-footnote" role="status">{approvalUnavailable}</p>}
         {approvalResult && <a className="button button-secondary" href={approvalResult.approval_url}>Open PayPal approval<span aria-hidden="true">↗</span></a>}
         {approve.isError && <ErrorMessage error={approve.error} retry={approve.error instanceof ApiError && !['order_outcome_unknown', 'charge_unavailable'].includes(approve.error.code ?? '') ? () => approve.mutate() : undefined}/>}
         {approve.isSuccess && <p className="form-success" role="status">PayPal order {approve.data.order_id} is ready for buyer authorization. No funds have been captured.</p>}

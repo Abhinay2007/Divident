@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { approvePlan, capturePlan, getPlan, ApiError } from './api'
 import { paypalReturnState } from './planAccess.js'
-import { captureConfirmationMessage } from './paymentConfirmation.js'
+import { approvalUnavailableReason, captureConfirmationMessage } from './paymentConfirmation.js'
+import SyntheticDemoBanner from './SyntheticDemoBanner'
 
 function money(cents: number | null) {
   return cents === null ? 'Unknown' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -30,30 +31,37 @@ export default function FundScreen({ planId }: { planId: string }) {
   const returnedFromPayPal = paypalState === 'return'
   const cancelledAtPayPal = paypalState === 'cancel'
   const uncertain = record.state === 'funding' && !record.order_id
-  const approvalUnavailable = record.charge_cents === null || record.est_payout_fees_cents === null
+  const approvalUnavailable = approvalUnavailableReason(record)
   const approval = approve.data
+  const paymentSteps = [
+    { title: 'Create PayPal order', done: !!record.order_id, current: record.state === 'draft' },
+    { title: 'Approve with PayPal', done: returnedFromPayPal || record.capture_gross_cents !== null, current: record.state === 'funding' && !!record.order_id && !returnedFromPayPal },
+    { title: 'Confirm capture', done: record.capture_gross_cents !== null, current: returnedFromPayPal && record.capture_gross_cents === null },
+  ]
 
   return <section className="discovery-page funding-page">
     <a className="back-link" href={`/allocation/${record.id}`}>← Allocation review</a>
+    {record.synthetic_demo && <SyntheticDemoBanner/>}
     <div className="discovery-heading discovery-heading-session"><div><div className="eyebrow">FUNDING</div><h1>Funding status.</h1><p>Plan state and payment details reported by the backend.</p></div><span className={`status-pill status-${uncertain ? 'uncertain' : record.state}`}><span/>{paymentState(record.state, record.order_id, uncertain)}</span></div>
 
     <section className="session-panel allocation-summary" aria-labelledby="funding-summary-title">
       <div className="session-panel-head"><div><span className="section-kicker">PAYMENT SUMMARY</span><h2 id="funding-summary-title">Plan {record.id.slice(0, 8)}</h2></div>{record.order_id && <code className="session-id">Order {record.order_id}</code>}</div>
-      <div className="session-stats allocation-stats">
-        <Summary label="Plan budget" value={money(record.budget_cents)}/>
-        <Summary label="Payable allocations" value={money(record.payable_total_cents)}/>
-        <Summary label="Estimated incoming fee" value={record.est_incoming_fee_cents === null ? 'Unknown' : money(record.est_incoming_fee_cents)}/>
-        <Summary label="Estimated payout fees" value={record.est_payout_fees_cents === null ? 'Unknown' : money(record.est_payout_fees_cents)}/>
-        <Summary label="Funding charge" value={money(record.charge_cents)}/>
-        <Summary label="Provider-confirmed capture" value={record.capture_gross_cents === null ? 'None recorded' : money(record.capture_gross_cents)}/>
+      <div className="money-summary" aria-label="Plan money summary">
+        <Summary label="Charged now" value={record.capture_gross_cents === null ? 'Not charged' : money(record.capture_gross_cents)}/>
+        <Summary label="Pledged, not charged" value={money(record.money_summary.pledged_cents)}/>
+        <Summary label="PayPal fee estimate" value={record.money_summary.fee_estimate_cents === null ? 'Unavailable' : money(record.money_summary.fee_estimate_cents)}/>
       </div>
+      <p className="allocation-summary-note"><span>Order charge <strong>{money(record.charge_cents)}</strong></span><span>Payable <strong>{money(record.payable_total_cents)}</strong></span><span>Capture confirmed <strong>{record.capture_gross_cents === null ? 'No' : money(record.capture_gross_cents)}</strong></span></p>
       <p className="allocation-summary-note"><strong>{summary(record.state, uncertain, record.order_id, record.capture_gross_cents)}</strong>{record.est_payout_fees_cents === null && ' This plan has no payable US recipient or supported fee scope, so approval and capture are blocked.'}{record.fee_policy_version && ` Fee estimates use ${record.fee_policy_version}; actual PayPal fees are recorded from provider responses.`}{record.failure_reason && ` Backend failure reason: ${record.failure_reason}.`}</p>
     </section>
+
+    <ol className="payment-sequence" aria-label="PayPal funding steps">{paymentSteps.map((step, index) => <li key={step.title} className={step.done ? 'step-done' : step.current ? 'step-current' : ''}><span className="payment-step-number">0{index + 1}</span><span><strong>{step.title}</strong><small>{step.done ? 'Complete' : step.current ? 'Current step' : 'Not started'}</small></span></li>)}</ol>
 
     <section className="continue-panel approval-panel funding-action-panel" aria-labelledby="funding-action-title">
       <div className="continue-copy"><span className="section-kicker">PAYMENT ACTION</span><h2 id="funding-action-title">{record.state === 'draft' ? 'Review approval eligibility' : 'Current payment status'}</h2><p>{actionDescription(record.state, uncertain, returnedFromPayPal, cancelledAtPayPal, record.order_id)}</p></div>
       <div className="approval-actions">
-        {record.state === 'draft' && <button className="button button-primary" type="button" disabled={approve.isPending || approvalUnavailable} title={approvalUnavailable ? 'Approval requires measured payment fee inputs.' : undefined} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking fee inputs…' : approvalUnavailable ? 'Approval unavailable · fees unmeasured' : 'Create PayPal order'}</button>}
+        {record.state === 'draft' && <button className="button button-primary" type="button" disabled={approve.isPending || !!approvalUnavailable} onClick={() => approve.mutate()}>{approve.isPending ? 'Checking fee inputs…' : approvalUnavailable ? 'Approval unavailable' : 'Create PayPal order'}</button>}
+        {record.state === 'draft' && approvalUnavailable && <p className="funding-footnote" role="status">{approvalUnavailable}</p>}
         {record.state === 'funding' && record.order_id && !returnedFromPayPal && <button className="button button-secondary" type="button" disabled={approve.isPending} onClick={() => approve.mutate()}>{approve.isPending ? 'Retrieving approval link…' : cancelledAtPayPal ? 'Reopen PayPal approval' : 'Retrieve existing PayPal approval link'}</button>}
         {approval && <a className="button button-secondary" href={approval.approval_url}>Continue to PayPal Sandbox ↗</a>}
         {record.state === 'funding' && record.order_id && returnedFromPayPal && record.charge_cents !== null && <button className="button button-primary" type="button" disabled={capture.isPending} onClick={() => {
@@ -66,6 +74,7 @@ export default function FundScreen({ planId }: { planId: string }) {
         {capture.isSuccess && <div className="form-success" role="status"><strong>PayPal Sandbox capture response</strong><p>Capture reference <code>{capture.data.capture.capture_id}</code> · {capture.data.capture.status} · {capture.data.capture.currency}</p><p>Gross {money(capture.data.capture.gross_cents)} · PayPal fee {money(capture.data.capture.fee_cents)} · Net {money(capture.data.capture.net_cents)} · plan state {label(capture.data.state)}</p></div>}
       </div>
     </section>
+    {record.state === 'funded' && <a className="text-link payout-next-link" href={`/payouts/${record.id}`}>Review separate payout approval <span aria-hidden="true">→</span></a>}
     <p className="funding-footnote">An order is not a completed payment. Funds are shown as received only after PayPal confirms capture. No payout is initiated here.</p>
   </section>
 }

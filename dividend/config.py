@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[AnyHttpUrl] = Field(default_factory=lambda: ["http://localhost:5173"])
     DEMO_SEED_ON_BOOT: bool = True
     DEMO_SANDBOX_RECIPIENTS_FILE: Path | None = Field(default=None, exclude=True, repr=False)
+    SYNTHETIC_SANDBOX_RECIPIENTS_FILE: Path | None = Field(default=None, exclude=True, repr=False)
 
     PAYPAL_ENV: Literal["sandbox"] = "sandbox"
     PAYMENTS_MODE: Literal["paypal", "fake"] = "paypal"

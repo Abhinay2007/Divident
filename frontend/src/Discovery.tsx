@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react'
 import { ApiError, createDemoSession, createPlan, getPlan, getProjects, getSession, getWorkspace, type Project, type SourceDetail } from './api'
 import { planTokenKey } from './planAccess.js'
 import { continuePath } from './workspace.js'
+import SyntheticDemoBanner from './SyntheticDemoBanner'
 
 function ErrorMessage({ error, retry, message }: { error: Error; retry?: () => void; message?: string }) {
   const requestId = error instanceof ApiError ? error.requestId : undefined
@@ -28,6 +29,9 @@ function budgetToCents(value: string) {
 
 export default function Discovery({ sessionId }: { sessionId?: string }) {
   const [budget, setBudget] = useState('')
+  const [sourceSearch, setSourceSearch] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('all')
+  const [sourcePage, setSourcePage] = useState(0)
   const [evaluationDate, setEvaluationDate] = useState(localToday)
   const [formError, setFormError] = useState('')
   const workspace = useQuery({ queryKey: ['workspace'], queryFn: getWorkspace })
@@ -96,11 +100,27 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
   const eligibleProjects = projectList.filter((project) => project.validated)
   const sourceRows = projects.data?.sources ?? []
   const projectsByKey = new Map(projectList.map((item) => [item.upstream_key, item]))
+  const pageSize = 50
+  const visibleSources = sourceRows.filter((source) => {
+    const project = source.upstream_key ? projectsByKey.get(source.upstream_key) : undefined
+    const matchesFilter = sourceFilter === 'all'
+      || sourceFilter === 'verified' && source.validated
+      || sourceFilter === 'unverified' && !!source.upstream_key && !source.validated
+      || sourceFilter === 'unmapped' && !source.upstream_key && source.outcome !== 'no_upstream'
+      || sourceFilter === 'no_upstream' && source.outcome === 'no_upstream'
+    const query = sourceSearch.trim().toLocaleLowerCase()
+    const matchesSearch = !query || [source.source_name, source.upstream_key, source.method, ...(source.binary_names ?? []), project?.display_name]
+      .some((value) => value?.toLocaleLowerCase().includes(query))
+    return matchesFilter && matchesSearch
+  })
+  const sourcePageCount = Math.ceil(visibleSources.length / pageSize)
+  const pageSources = visibleSources.slice(sourcePage * pageSize, (sourcePage + 1) * pageSize)
   const isResolving = ['created', 'resolving'].includes(record.status)
 
   return <section className="discovery-page">
     <a className="back-link" href="/">← Overview</a>
-    <div className="discovery-heading discovery-heading-session"><div><div className="eyebrow">PACKAGE DISCOVERY</div><h1>Package discovery</h1><p>Binary packages are grouped by Debian source, then linked to the upstream projects returned by this session.</p>{record.mode === 'demo' && <p className="fixture-note">Fixture-derived session. Curl and systemd evidence is checked in for reproducibility; no live source-page request is implied.</p>}</div><span className={`status-pill status-${record.status}`}><span/>{stateLabel(record.status)}</span></div>
+    {record.synthetic_demo && <SyntheticDemoBanner/>}
+    <div className="discovery-heading discovery-heading-session"><div><div className="eyebrow">PACKAGE DISCOVERY</div><h1>Package discovery</h1><p>Binary packages are grouped by Debian source, then linked to the upstream projects returned by this session.</p>{record.synthetic_demo ? <p className="fixture-note">Project mapping facts use bundled fixtures. All contributor labels and contribution evidence in this workflow are fictional.</p> : record.mode === 'demo' && <p className="fixture-note">Fixture-derived session. Curl and systemd project evidence is checked in for reproducibility; no live source-page request is implied.</p>}</div><span className={`status-pill status-${record.status}`}><span/>{stateLabel(record.status)}</span></div>
 
     <section className="session-panel" aria-labelledby="session-summary-title">
       <div className="session-panel-head"><div><span className="section-kicker">SESSION</span><h2 id="session-summary-title">Resolution progress</h2></div><code className="session-id">{record.id}</code></div>
@@ -119,8 +139,14 @@ export default function Discovery({ sessionId }: { sessionId?: string }) {
     {currentPlans.length > 0 && <section className="continue-panel" aria-labelledby="saved-plan-title"><div className="continue-copy"><span className="section-kicker">EXISTING PLANS</span><h2 id="saved-plan-title">Resume a saved plan</h2><p>Continue opens the recorded plan and its payment history. It will not create another plan or PayPal order.</p></div><div className="workspace-links">{currentPlans.map((ref, index) => { const query = currentPlanQueries[index]; return query?.data ? <a className="workspace-link" key={ref.id} href={continuePath(query.data.state, ref.id)}><span><strong>Plan {ref.id.slice(0, 8)} · {stateLabel(query.data.state)}</strong><small>Last updated {new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ref.last_updated_at))}</small></span><span>Continue →</span></a> : <span className="workspace-link" key={ref.id}>{query?.error instanceof ApiError && query.error.code === 'plan_auth_required' ? 'Plan access unavailable in this browser.' : 'Loading saved plan…'}</span> })}</div></section>}
 
     <section className="source-section" aria-labelledby="source-table-title">
-      <div className="source-section-heading"><div><span className="section-kicker">PACKAGE MAP</span><h2 id="source-table-title">Source packages &amp; upstream projects</h2></div><span className="row-count">{projects.isPending ? 'Loading' : `${sourceRows.length.toLocaleString()} sources`}</span></div>
-      {projects.isPending ? <div className="skeleton table-skeleton" aria-label="Loading source package mappings"/> : sourceRows.length === 0 ? <div className="empty-state"><h3>No source package details returned</h3><p>The session has no source rows to display.</p></div> : <div className="table-scroll" role="region" aria-label="Source package mappings" tabIndex={0}><table className="source-table"><thead><tr><th scope="col">Source package</th><th scope="col">Binary packages</th><th scope="col">Upstream project</th><th scope="col">Resolution</th></tr></thead><tbody>{sourceRows.map((source) => <SourceRow key={source.source_name} source={source} project={source.upstream_key ? projectsByKey.get(source.upstream_key) : undefined}/>)}</tbody></table></div>}
+      <div className="source-section-heading"><div><span className="section-kicker">PACKAGE MAP</span><h2 id="source-table-title">Source packages &amp; upstream projects</h2></div><span className="row-count">{projects.isPending ? 'Loading' : `${visibleSources.length.toLocaleString()} matching · ${sourceRows.length.toLocaleString()} total`}</span></div>
+      {projects.isPending ? <div className="skeleton table-skeleton" aria-label="Loading source package mappings"/> : sourceRows.length === 0 ? <div className="empty-state"><h3>No source package details returned</h3><p>The session has no source rows to display.</p></div> : <>
+        <div className="table-controls"><label>Search packages<input type="search" name="package-search" autoComplete="off" value={sourceSearch} onChange={(event) => { setSourceSearch(event.target.value); setSourcePage(0) }} placeholder="Search source, binary, or project…"/></label><label>Mapping status<select name="mapping-status" value={sourceFilter} onChange={(event) => { setSourceFilter(event.target.value); setSourcePage(0) }}><option value="all">All mappings</option><option value="verified">Verified</option><option value="unverified">Unverified</option><option value="unmapped">Unmapped</option><option value="no_upstream">No upstream</option></select></label></div>
+        {visibleSources.length === 0 ? <div className="empty-state"><h3>No matching source packages</h3><p>Change the search or mapping status filter.</p></div> : <>
+          <div className="table-scroll" role="region" aria-label="Source package mappings" tabIndex={0}><table className="source-table"><thead><tr><th scope="col">Source package</th><th scope="col">Binary packages</th><th scope="col">Upstream project</th><th scope="col">Resolution</th></tr></thead><tbody>{pageSources.map((source) => <SourceRow key={source.source_name} source={source} project={source.upstream_key ? projectsByKey.get(source.upstream_key) : undefined}/>)}</tbody></table></div>
+          {sourcePageCount > 1 && <nav className="pagination-controls" aria-label="Source package pages"><span>Page {sourcePage + 1} of {sourcePageCount}</span><button className="button button-secondary" type="button" disabled={sourcePage === 0} onClick={() => setSourcePage(sourcePage - 1)}>Previous page</button><button className="button button-secondary" type="button" disabled={sourcePage + 1 === sourcePageCount} onClick={() => setSourcePage(sourcePage + 1)}>Next page</button></nav>}
+        </>}
+      </>}
     </section>
 
     {record.status === 'ready' && !projects.isPending && !projects.isError && <section className="continue-panel" aria-labelledby="continue-title"><div className="continue-copy"><span className="section-kicker">NEXT STEP</span><h2 id="continue-title">Prepare an allocation plan</h2><p>Only projects with validated upstream identity enter the deterministic allocation.</p></div>{eligibleProjects.length === 0 ? <p className="no-eligible">No verified upstream projects are eligible. Unverified discoveries remain visible above.</p> : <form className="plan-form" onSubmit={submitPlan}>

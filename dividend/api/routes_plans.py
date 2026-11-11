@@ -10,10 +10,18 @@ from ..schemas import (
     PayoutsResponse, ExplanationsResponse, EvidenceReviewResponse,
 )
 from ..services import ExplanationService, PlanService
+from ..services.synthetic_demo_service import SyntheticDemoService
 from .deps import get_db, get_payment_service, plan_access_token, require_plan_access
 
 
 router = APIRouter(prefix="/api", tags=["plans"])
+
+
+@router.post("/synthetic-sandbox-demo", response_model=PlanResponse, status_code=201)
+async def create_synthetic_sandbox_demo(request: Request, db: DbSession = Depends(get_db)):
+    plan = SyntheticDemoService.create(db, request.app.state.settings)
+    token = plan_access_token(request.app.state.settings.ADMIN_TOKEN, plan.id)
+    return _plan_response(plan, token)
 
 
 def _plan_response(plan: Plan, action_token: str | None = None) -> PlanResponse:
@@ -35,6 +43,9 @@ def _plan_response(plan: Plan, action_token: str | None = None) -> PlanResponse:
         id=plan.id,
         session_id=plan.session_id,
         state=plan.state,
+        synthetic_demo=plan.synthetic_demo,
+        synthetic_fixture_version=plan.synthetic_fixture_version,
+        synthetic_policy_version=plan.synthetic_policy_version,
         budget_cents=plan.budget_cents,
         payable_total_cents=plan.payable_total_cents,
         reserved_total_cents=plan.reserved_total_cents,

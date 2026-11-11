@@ -43,7 +43,7 @@ export default function WorkspaceActivity() {
     <div className="card-heading"><h2 id="workspace-title">Recent activity</h2><a className="muted-label" href="/discovery">ALL SESSIONS →</a></div>
     {!hasWorkspaceActivity(sessions) ? <div className="empty-activity"><span className="empty-indicator"/><p>No saved sessions yet. Start a discovery to begin; leaving a workflow does not delete it.</p></div> : <div className="workspace-sessions">
       {sessions.map((session) => <article className="workspace-session" key={session.id}>
-        <div className="workspace-session-head"><div><span className="section-kicker">{label(session.mode)} SESSION</span><h3>{session.source_count.toLocaleString()} source packages</h3><p>Last activity {date(session.last_updated_at)}</p></div><span className={`status-pill status-${session.status}`}><span/>{label(session.status)}</span></div>
+        <div className="workspace-session-head"><div><span className="section-kicker">{session.synthetic_demo ? 'SYNTHETIC SANDBOX DEMO' : `${label(session.mode)} SESSION`}</span><h3>{session.source_count.toLocaleString()} source packages</h3><p>Last activity {date(session.last_updated_at)}</p></div><span className={`status-pill status-${session.status}`}><span/>{label(session.status)}</span></div>
         <a className="text-link" href={`/discovery/${session.id}`}>Continue discovery →</a>
         {session.plans.length > 0 && <div className="workspace-plans">{session.plans.map((planRef) => {
           const index = refs.findIndex((ref) => ref.id === planRef.id)
@@ -52,7 +52,7 @@ export default function WorkspaceActivity() {
           const record = planQuery?.data
           const unauthorized = planQuery?.error instanceof ApiError && planQuery.error.code === 'plan_auth_required'
           return <div className="workspace-plan" key={planRef.id}>
-            <div className="workspace-plan-main"><span className="section-kicker">FUNDING PLAN</span><strong>Plan {planRef.id.slice(0, 8)}</strong>
+            <div className="workspace-plan-main"><span className="section-kicker">{planRef.synthetic_demo ? 'SYNTHETIC SANDBOX DEMO PLAN' : 'FUNDING PLAN'}</span><strong>Plan {planRef.id.slice(0, 8)}</strong>
               {record ? <><span className={`status-pill status-${record.state}`}><span/>{label(record.state)}</span><small>{record.capture_gross_cents !== null ? `Capture confirmed · $${(record.capture_gross_cents / 100).toFixed(2)}` : record.state === 'funding' ? 'PayPal order created · capture pending' : 'No capture confirmed'}</small><small>Payouts: {payouts ? payoutStatus(record, payouts) : record.state === 'funded' ? 'Ready to distribute' : 'Loading status…'}{payouts && ` · ${payoutActivity(payouts)}`}</small></> : <span className="cell-muted">{unauthorized ? 'Plan access is unavailable in this browser.' : planQuery?.isError ? 'Plan status unavailable.' : 'Loading plan status…'}</span>}
               <small>Last updated {date(planRef.last_updated_at)}</small>
               {payoutQueries[index]?.isError && <small className="inline-error">Payout activity unavailable.</small>}

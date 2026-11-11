@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, event, inspect, select
+from sqlalchemy import Engine, Index, create_engine, event, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -102,10 +102,19 @@ def initialize_database(engine: Engine, metadata=None) -> None:
         # migrations below, so add them before either migration selects rows.
         inspector = inspect(engine)
         for table, definitions in {
+            "sessions": {
+                "synthetic_demo": "BOOLEAN NOT NULL DEFAULT 0",
+                "synthetic_fixture_version": "VARCHAR(64)",
+                "synthetic_policy_version": "VARCHAR(64)",
+                "synthetic_run_key": "VARCHAR(64)",
+            },
             "plans": {
                 "est_incoming_fee_cents": "INTEGER",
                 "fee_policy_version": "VARCHAR(64)",
                 "fee_policy_snapshot": "JSON",
+                "synthetic_demo": "BOOLEAN NOT NULL DEFAULT 0",
+                "synthetic_fixture_version": "VARCHAR(64)",
+                "synthetic_policy_version": "VARCHAR(64)",
             },
             "plan_lines": {"maintainer_splits": "JSON"},
             "maintainers": {
@@ -115,6 +124,7 @@ def initialize_database(engine: Engine, metadata=None) -> None:
             },
             "payout_items": {"maintainer_id": "VARCHAR(36)"},
             "payout_batches": {"estimated_fees_cents": "INTEGER"},
+            "payment_operations": {"synthetic_demo": "BOOLEAN NOT NULL DEFAULT 0"},
         }.items():
             if table not in inspector.get_table_names():
                 continue
@@ -127,9 +137,26 @@ def initialize_database(engine: Engine, metadata=None) -> None:
                             f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"
                         )
                 inspector = inspect(engine)
-        _upgrade_plan_persistence(engine)
-        _upgrade_maintainer_recipients(engine)
-        _upgrade_payment_operations(engine)
+        tables = set(inspect(engine).get_table_names())
+        if {"plans", "plan_lines"}.issubset(tables):
+            _upgrade_plan_persistence(engine)
+        if {"maintainers", "plan_lines"}.issubset(tables):
+            _upgrade_maintainer_recipients(engine)
+        if "payment_operations" in tables:
+            _upgrade_payment_operations(engine)
+    if registered_metadata is Base.metadata and "sessions" in inspect(engine).get_table_names():
+        if engine.dialect.name == "sqlite":
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_synthetic_run_key "
+                    "ON sessions (synthetic_run_key) WHERE synthetic_run_key IS NOT NULL"
+                )
+        else:
+            from .models import Session as SessionModel
+            Index("uq_sessions_synthetic_run_key", SessionModel.synthetic_run_key,
+                  unique=True, postgresql_where=text("synthetic_run_key IS NOT NULL")).create(
+                      engine, checkfirst=True
+                  )
 
 
 def _upgrade_maintainer_recipients(engine: Engine) -> None:
@@ -370,13 +397,13 @@ def _upgrade_plan_persistence(engine: Engine) -> None:
     """
     from . import models  # noqa: F401 - ensure model tables are registered
 
-    plan_table = Base.metadata.tables["plans"]
-    line_table = Base.metadata.tables["plan_lines"]
     with engine.connect() as connection:
         inspector = inspect(connection)
         tables = set(inspector.get_table_names())
         if not {"plans", "plan_lines"}.issubset(tables):
             return
+        plan_table = Base.metadata.tables["plans"]
+        line_table = Base.metadata.tables["plan_lines"]
         plan_columns = {column["name"]: column for column in inspector.get_columns("plans")}
         line_columns = {column["name"]: column for column in inspector.get_columns("plan_lines")}
         rebuild_plans = any(

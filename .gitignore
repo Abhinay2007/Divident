@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 /data/demo_sandbox_recipients.yaml
+/.local/
 
 # Python virtual environments, bytecode, and caches
 .venv/
@@ -32,6 +33,7 @@ node_modules/
 *.tsbuildinfo
 frontend/dist/
 frontend/.vite/
+frontend/.taste-skill/
 dist/
 
 # IDE and operating-system metadata

@@ -1,0 +1,18 @@
+schema: 1
+fixture_version: synthetic-curl-contributors-v1
+project_key: github.com/curl/curl
+contributors:
+  - id: contributor-a
+    label: Fictional Contributor A
+    evidence:
+      - signal_type: merged_pull_request
+        reference: synthetic://curl/contribution/pr-001
+      - signal_type: code_review
+        reference: synthetic://curl/contribution/review-002
+  - id: contributor-b
+    label: Fictional Contributor B
+    evidence:
+      - signal_type: accepted_commit
+        reference: synthetic://curl/contribution/commit-003
+      - signal_type: resolved_issue
+        reference: synthetic://curl/contribution/issue-004

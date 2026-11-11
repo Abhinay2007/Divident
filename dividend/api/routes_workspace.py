@@ -63,12 +63,14 @@ async def get_workspace(db: DbSession = Depends(get_db)):
         updated_at = max(timestamps)
         plans_by_session[plan.session_id].append(WorkspacePlanRef(
             id=plan.id, created_at=plan.created_at, last_updated_at=updated_at,
+            synthetic_demo=plan.synthetic_demo,
         ))
         latest_session_update[plan.session_id] = max(latest_session_update[plan.session_id], updated_at)
 
     return WorkspaceResponse(sessions=[WorkspaceSession(
         id=session.id,
         mode=session.mode,
+        synthetic_demo=session.synthetic_demo,
         status=session.status,
         source_count=session.source_count,
         binary_count=session.binary_count,

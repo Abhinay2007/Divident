@@ -16,6 +16,9 @@ def _session_response(session: SessionRecord) -> SessionResponse:
     return SessionResponse(
         id=session.id,
         mode=session.mode,
+        synthetic_demo=session.synthetic_demo,
+        synthetic_fixture_version=session.synthetic_fixture_version,
+        synthetic_policy_version=session.synthetic_policy_version,
         status=session.status,
         stage=session.stage,
         progress_done=session.progress_done,

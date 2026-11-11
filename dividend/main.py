@@ -104,7 +104,9 @@ def create_app(
     app.state.payment_service = (
         PaymentService(provider, str(configured.PUBLIC_BASE_URL),
                        configured.allocation_policy_path
-                       if configured.allocation_policy_path.exists() else None)
+                       if configured.allocation_policy_path.exists() else None,
+                       payments_mode=configured.PAYMENTS_MODE,
+                       paypal_env=configured.PAYPAL_ENV)
         if provider is not None else None
     )
     if resolution_runner is None and owns_engine and configured.ENRICH_MODE == "fixtures":

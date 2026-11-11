@@ -11,7 +11,7 @@ from ..allocation.policy import load_allocation_policy
 from ..errors import (InvariantViolation, NotFoundError, PaymentProviderError,
                       StateError, ValidationError)
 from ..ledger import append as append_ledger_event
-from ..models import (LedgerEvent, Maintainer, MaintainerRecipient,
+from ..models import (LedgerEvent, Maintainer, MaintainerRecipient, SyntheticSandboxRecipient,
                       PaymentOperation, PayoutBatch, PayoutItem, Plan, PlanLine)
 from ..schemas import (ApproveResponse, BatchResponse, CaptureDetail,
                        CaptureResponse, ItemResponse, PayoutResponse,
@@ -57,13 +57,16 @@ def _begin_immediate(tx: DbSession) -> None:
         raise
 
 
-def _available_funds_cents(tx: DbSession) -> int:
-    plans = list(tx.scalars(select(Plan).where(Plan.capture_net_cents.is_not(None))))
+def _available_funds_cents(tx: DbSession, synthetic_demo: bool = False) -> int:
+    plans = list(tx.scalars(select(Plan).where(
+        Plan.capture_net_cents.is_not(None), Plan.synthetic_demo.is_(synthetic_demo),
+    )))
     captured = sum(plan.capture_net_cents or 0 for plan in plans)
     failed_plan_reserve = sum(
         plan.capture_net_cents or 0 for plan in plans if plan.state == "failed"
     )
-    batches = list(tx.scalars(select(PayoutBatch)))
+    plan_ids = [plan.id for plan in plans]
+    batches = list(tx.scalars(select(PayoutBatch).where(PayoutBatch.plan_id.in_(plan_ids)))) if plan_ids else []
     items_by_batch = {
         batch.id: list(tx.scalars(select(PayoutItem).where(PayoutItem.batch_id == batch.id)))
         for batch in batches
@@ -89,7 +92,9 @@ def _available_funds_cents(tx: DbSession) -> int:
     return captured - failed_plan_reserve - spent - reserved - fees
 
 
-def _recipient_by_id(tx: DbSession, maintainer_id: str):
+def _recipient_by_id(tx: DbSession, maintainer_id: str, *, synthetic_demo: bool = False):
+    if synthetic_demo:
+        return tx.get(SyntheticSandboxRecipient, maintainer_id)
     recipient = tx.get(MaintainerRecipient, maintainer_id)
     if recipient is not None:
         return recipient
@@ -98,6 +103,8 @@ def _recipient_by_id(tx: DbSession, maintainer_id: str):
 
 def _eligible_recipient(recipient, upstream_key: str) -> bool:
     return bool(
+        type(recipient) in {Maintainer, MaintainerRecipient}
+        and
         recipient is not None
         and recipient.upstream_key == upstream_key
         and recipient.opted_in is True
@@ -108,16 +115,34 @@ def _eligible_recipient(recipient, upstream_key: str) -> bool:
     )
 
 
+def _eligible_synthetic_recipient(recipient, upstream_key: str) -> bool:
+    return bool(
+        type(recipient) is SyntheticSandboxRecipient
+        and recipient.upstream_key == upstream_key
+        and recipient.market_code == "US"
+        and isinstance(recipient.email, str)
+        and _EMAIL.fullmatch(recipient.email)
+    )
+
+
 class PaymentService:
     def __init__(self, provider: PaymentsProvider, public_base_url: str,
-                 allocation_policy_path=None):
+                 allocation_policy_path=None, *, payments_mode="paypal", paypal_env="sandbox"):
         self.provider = provider
         self.public_base_url = str(public_base_url).rstrip("/")
         self.policy = load_allocation_policy(allocation_policy_path) if allocation_policy_path is not None else load_allocation_policy()
+        self.payments_mode = payments_mode
+        self.paypal_env = paypal_env
+
+    def _require_synthetic_sandbox(self, plan: Plan) -> None:
+        if plan.synthetic_demo and (self.payments_mode != "paypal" or self.paypal_env != "sandbox"):
+            raise ValidationError("Synthetic demo payments require PayPal Sandbox mode",
+                                  code="synthetic_demo_sandbox_required")
 
     def approve_and_fund(self, plan_id: str, db: DbSession) -> ApproveResponse:
         with _new_session(db) as tx:
             plan = PlanService.get(tx, plan_id)
+            self._require_synthetic_sandbox(plan)
             PlanService.verify_approval_proposal(tx, plan)
             if plan.state == "cancelled":
                 raise StateError("Cancelled plan has no active approval link", code="plan_cancelled",
@@ -171,6 +196,7 @@ class PaymentService:
     def capture(self, plan_id: str, db: DbSession) -> CaptureResponse:
         with _new_session(db) as tx:
             plan = PlanService.get(tx, plan_id)
+            self._require_synthetic_sandbox(plan)
             PlanService.verify_approval_proposal(tx, plan)
             if plan.state == "funded" and plan.capture_gross_cents is not None:
                 event = tx.scalar(select(LedgerEvent).where(
@@ -269,6 +295,7 @@ class PaymentService:
             plan.capture_attempt = attempt
             tx.add(PaymentOperation(
                 plan_id=plan_id, kind="capture", attempt=attempt, state="intent",
+                synthetic_demo=plan.synthetic_demo,
                 request_id=request_id,
             ))
             tx.commit()
@@ -476,6 +503,7 @@ class PaymentService:
         with _new_session(db) as tx:
             _begin_immediate(tx)
             plan = PlanService.get(tx, plan_id)
+            self._require_synthetic_sandbox(plan)
             PlanService.verify_approval_proposal(tx, plan)
             self._require_measured_policy()
             snapshot = plan.fee_policy_snapshot
@@ -564,8 +592,10 @@ class PaymentService:
                                 or item.maintainer_id not in (None, split.get("maintainer_id"))):
                             raise InvariantViolation("Failed payout amount no longer matches the frozen recipient split",
                                                      code="payout_item_mismatch")
-                        recipient = _recipient_by_id(tx, split["maintainer_id"])
-                        if not _eligible_recipient(recipient, item.upstream_key):
+                        recipient = _recipient_by_id(tx, split["maintainer_id"], synthetic_demo=plan.synthetic_demo)
+                        valid_recipient = (_eligible_synthetic_recipient(recipient, item.upstream_key)
+                                           if plan.synthetic_demo else _eligible_recipient(recipient, item.upstream_key))
+                        if not valid_recipient:
                             raise InvariantViolation("Failed payout recipient is no longer eligible",
                                                      code="invalid_payout_recipient")
                         recipient_specs.append({
@@ -607,8 +637,10 @@ class PaymentService:
                                 raise InvariantViolation("Frozen recipient split is invalid",
                                                          code="invalid_payout_recipient")
                             seen_ids.add(split["maintainer_id"])
-                            recipient = _recipient_by_id(tx, split["maintainer_id"])
-                            if not _eligible_recipient(recipient, line.upstream_key):
+                            recipient = _recipient_by_id(tx, split["maintainer_id"], synthetic_demo=plan.synthetic_demo)
+                            valid_recipient = (_eligible_synthetic_recipient(recipient, line.upstream_key)
+                                               if plan.synthetic_demo else _eligible_recipient(recipient, line.upstream_key))
+                            if not valid_recipient:
                                 raise InvariantViolation("Payable allocation has no eligible recipient",
                                                          code="invalid_payout_recipient")
                             recipient_specs.append({
@@ -623,7 +655,7 @@ class PaymentService:
                     raise StateError("Plan has no eligible failed payout allocations" if retry else "Plan has no payable allocations",
                                      code="no_failed_payout_items" if retry else "no_payable_allocations",
                                      current_state=plan.state, allowed_transitions=[])
-                available = _available_funds_cents(tx)
+                available = _available_funds_cents(tx, plan.synthetic_demo)
                 payout_fee_estimate = assumptions["payout_fee_per_item_cents"] * len(recipient_specs)
                 required = sum(item["amount_cents"] for item in recipient_specs) + payout_fee_estimate
                 if available < required:
@@ -658,6 +690,7 @@ class PaymentService:
                 plan.payout_attempt = attempt
                 operation = PaymentOperation(
                     plan_id=plan_id, kind="payout", attempt=attempt, state="intent",
+                    synthetic_demo=plan.synthetic_demo,
                     request_id=f"plan:{plan_id}:payout:{attempt}", payout_batch_id=batch.id,
                     prior_plan_state=expected_state,
                 )
@@ -789,6 +822,7 @@ class PaymentService:
     def reconcile(self, plan_id: str, db: DbSession) -> PayoutsResponse:
         with _new_session(db) as tx:
             plan = PlanService.get(tx, plan_id)
+            self._require_synthetic_sandbox(plan)
             legacy = _LEGACY_PAYOUTS.get(plan_id)
             snapshot = plan.fee_policy_snapshot
             if (legacy is None or type(snapshot) is not dict

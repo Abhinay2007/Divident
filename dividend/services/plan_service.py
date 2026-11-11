@@ -165,6 +165,13 @@ class PlanService:
         if not valid_hash:
             raise ValidationError("Approval proposal snapshot is missing or has failed integrity verification",
                                   code="approval_snapshot_invalid")
+        if (proposal.get("synthetic_demo", False) is not plan.synthetic_demo
+                or (plan.synthetic_demo and (
+                    proposal.get("synthetic_fixture_version") != plan.synthetic_fixture_version
+                    or proposal.get("synthetic_policy_version") != plan.synthetic_policy_version
+                ))):
+            raise ValidationError("Proposal synthetic classification does not match the plan",
+                                  code="approval_snapshot_invalid")
         expected = [{
             "project_id": line.upstream_key,
             "amount_cents": line.amount_cents,
@@ -205,6 +212,8 @@ class PlanService:
         db: DbSession,
         session_id: str,
         evaluation_date: date,
+        *,
+        include_maintainer_evidence: bool = True,
     ) -> AllocationInputSet:
         """Build eligible ProjectInput values without writing to the database.
 
@@ -350,59 +359,59 @@ class PlanService:
             raise AllocationError("session has no eligible upstream projects")
 
         project_keys = [project.upstream_key for project in projects]
-        legacy_rows = list(db.scalars(select(Maintainer).where(
-            Maintainer.upstream_key.in_(project_keys)
-        )))
-        additional_rows = list(db.scalars(select(MaintainerRecipient).where(
-            MaintainerRecipient.upstream_key.in_(project_keys)
-        )))
-        legacy_by_key = {row.upstream_key: row for row in legacy_rows}
-        additional_by_key: dict[str, list[MaintainerRecipient]] = {}
-        for row in additional_rows:
-            additional_by_key.setdefault(row.upstream_key, []).append(row)
+        if not include_maintainer_evidence:
+            recipients_by_key = {}
+            opted_in_by_key = {}
+            evidence_by_key = {}
+            evidence_context = {}
+        else:
+            legacy_rows = list(db.scalars(select(Maintainer).where(
+                Maintainer.upstream_key.in_(project_keys)
+            )))
+            additional_rows = list(db.scalars(select(MaintainerRecipient).where(
+                MaintainerRecipient.upstream_key.in_(project_keys)
+            )))
+            legacy_by_key = {row.upstream_key: row for row in legacy_rows}
+            additional_by_key: dict[str, list[MaintainerRecipient]] = {}
+            for row in additional_rows:
+                additional_by_key.setdefault(row.upstream_key, []).append(row)
 
-        recipients_by_key: dict[str, tuple[MaintainerShare, ...]] = {}
-        opted_in_by_key: dict[str, bool] = {}
-        for key in project_keys:
-            # Explicit multi-recipient records replace the legacy row for new plans.
-            rows = additional_by_key.get(key)
-            candidates = rows if rows is not None else ([legacy_by_key[key]] if key in legacy_by_key else [])
-            configured_eligible = []
-            for row in candidates:
-                if type(row.opted_in) is not bool:
-                    raise AllocationError(f"invalid maintainer opt-in for {key!r}")
-                active = row.active
-                if row.opted_in is True and active is True and row.market_code == "US":
-                    if type(row.email) is not str or not _EMAIL.fullmatch(row.email):
-                        raise AllocationError(f"eligible maintainer has invalid recipient details for {key!r}")
-                    share_bps = row.share_bps
-                    if type(share_bps) is not int or not 1 <= share_bps <= 10000:
-                        raise AllocationError(f"invalid maintainer share for {key!r}")
-                    configured_eligible.append(MaintainerShare(
-                        row.id, row.display_name, row.email, share_bps,
-                    ))
-            if configured_eligible and sum(row.share_bps for row in configured_eligible) != 10000:
-                raise AllocationError(f"eligible maintainer shares for {key!r} must total exactly 100 percent")
-            # These records identify eligible payees; configured shares are not
-            # contribution evidence and never affect the evidence scorer.
-            recipients_by_key[key] = tuple(configured_eligible)
-            opted_in_by_key[key] = bool(configured_eligible)
+            recipients_by_key: dict[str, tuple[MaintainerShare, ...]] = {}
+            opted_in_by_key: dict[str, bool] = {}
+            for key in project_keys:
+                rows = additional_by_key.get(key)
+                candidates = rows if rows is not None else ([legacy_by_key[key]] if key in legacy_by_key else [])
+                configured_eligible = []
+                for row in candidates:
+                    if type(row.opted_in) is not bool:
+                        raise AllocationError(f"invalid maintainer opt-in for {key!r}")
+                    if row.opted_in is True and row.active is True and row.market_code == "US":
+                        if type(row.email) is not str or not _EMAIL.fullmatch(row.email):
+                            raise AllocationError(f"eligible maintainer has invalid recipient details for {key!r}")
+                        if type(row.share_bps) is not int or not 1 <= row.share_bps <= 10000:
+                            raise AllocationError(f"invalid maintainer share for {key!r}")
+                        configured_eligible.append(MaintainerShare(
+                            row.id, row.display_name, row.email, row.share_bps,
+                        ))
+                if configured_eligible and sum(row.share_bps for row in configured_eligible) != 10000:
+                    raise AllocationError(f"eligible maintainer shares for {key!r} must total exactly 100 percent")
+                recipients_by_key[key] = tuple(configured_eligible)
+                opted_in_by_key[key] = bool(configured_eligible)
 
-        evidence_context = load_evidence_snapshot_context()
-        evidence_by_key: dict[str, tuple[dict, ...]] = {}
-        if _REPOSITORY_KEY in project_keys:
-            identity_map = load_demo_identity_map()
-            legacy_id_by_key = {row.upstream_key: row.id for row in legacy_rows}
-            for evidence in evidence_context["evidence"]:
-                upstream_key = identity_map.get(evidence["github_user_id"])
-                maintainer_id = legacy_id_by_key.get(upstream_key)
-                evidence_by_key.setdefault(_REPOSITORY_KEY, ())
-                evidence_by_key[_REPOSITORY_KEY] += ({
-                    **evidence,
-                    "maintainer_id": maintainer_id,
-                    # Ignore snapshot flags; mark provenance only after validation.
-                    "provenance": SERVER_EVIDENCE_PROVENANCE,
-                },)
+            evidence_context = load_evidence_snapshot_context()
+            evidence_by_key: dict[str, tuple[dict, ...]] = {}
+            if _REPOSITORY_KEY in project_keys:
+                identity_map = load_demo_identity_map()
+                legacy_id_by_key = {row.upstream_key: row.id for row in legacy_rows}
+                for evidence in evidence_context["evidence"]:
+                    upstream_key = identity_map.get(evidence["github_user_id"])
+                    maintainer_id = legacy_id_by_key.get(upstream_key)
+                    evidence_by_key.setdefault(_REPOSITORY_KEY, ())
+                    evidence_by_key[_REPOSITORY_KEY] += ({
+                        **evidence,
+                        "maintainer_id": maintainer_id,
+                        "provenance": SERVER_EVIDENCE_PROVENANCE,
+                    },)
 
         assembled: list[ProjectInput] = []
         for project in sorted(projects, key=lambda item: item.upstream_key):
@@ -458,6 +467,10 @@ class PlanService:
                 code="invalid_budget",
             )
 
+        session = db.get(Session, session_id)
+        if session is not None and session.synthetic_demo:
+            raise ValidationError("Synthetic demo sessions require the dedicated demo service",
+                                  code="synthetic_demo_isolated")
         inputs = PlanService.assemble_allocation_inputs(db, session_id, evaluation_date)
         if not inputs.projects:
             raise AllocationError("session has no eligible upstream projects")
@@ -563,6 +576,9 @@ class PlanService:
             )
 
         old_budget_cents = plan.budget_cents
+        if db.get(Session, plan.session_id).synthetic_demo:
+            raise ValidationError("Synthetic demo plans cannot use normal budget adjustment",
+                                  code="synthetic_demo_isolated")
         inputs = PlanService.assemble_allocation_inputs(
             db, plan.session_id, evaluation_date
         )

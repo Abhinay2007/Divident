@@ -63,6 +63,10 @@ class SessionService:
         mode: str,
         payload: dict | str | None,
         *,
+        synthetic_demo: bool = False,
+        synthetic_fixture_version: str | None = None,
+        synthetic_policy_version: str | None = None,
+        synthetic_run_key: str | None = None,
         background_tasks=None,
         resolution_runner: Callable[[str], None] | None = None,
     ) -> Session:
@@ -101,6 +105,10 @@ class SessionService:
 
         session = Session(
             mode=request.mode,
+            synthetic_demo=synthetic_demo,
+            synthetic_fixture_version=synthetic_fixture_version,
+            synthetic_policy_version=synthetic_policy_version,
+            synthetic_run_key=synthetic_run_key,
             status="created",
             source_names=source_names,
             source_binaries=source_binaries,
@@ -134,6 +142,10 @@ class SessionService:
                     "mode": session.mode,
                     "source_count": session.source_count,
                     "binary_count": session.binary_count,
+                    **({"synthetic_demo": True,
+                        "synthetic_fixture_version": session.synthetic_fixture_version,
+                        "synthetic_policy_version": session.synthetic_policy_version}
+                       if session.synthetic_demo else {}),
                 },
                 session_id=session.id,
             )

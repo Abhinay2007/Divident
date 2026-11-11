@@ -1,0 +1,5 @@
+schema: 1
+policy_version: synthetic-attribution-single-sandbox-destination-v1
+allocation_engine: deterministic-project-allocation-v1
+method: supported-fictional-evidence-enables-one-configured-sandbox-destination
+required_distinct_signal_types: 2

@@ -6,6 +6,9 @@ export { planHeaders } from './planAccess.js'
 export type Session = {
   id: string
   mode: string
+  synthetic_demo: boolean
+  synthetic_fixture_version: string | null
+  synthetic_policy_version: string | null
   status: 'created' | 'resolving' | 'ready' | 'failed' | string
   stage: string | null
   progress_done: number
@@ -19,12 +22,13 @@ export type Workspace = {
   sessions: {
     id: string
     mode: string
+    synthetic_demo: boolean
     status: string
     source_count: number
     binary_count: number | null
     created_at: string
     last_updated_at: string
-    plans: { id: string; created_at: string; last_updated_at: string }[]
+    plans: { id: string; created_at: string; last_updated_at: string; synthetic_demo: boolean }[]
   }[]
 }
 
@@ -81,6 +85,10 @@ export type Plan = {
   id: string
   session_id: string
   state: string
+  synthetic_demo: boolean
+  synthetic_fixture_version: string | null
+  synthetic_policy_version: string | null
+  action_token?: string | null
   budget_cents: number
   payable_total_cents: number
   reserved_total_cents: number
@@ -195,6 +203,10 @@ export function createDemoSession() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode: 'demo' }),
   })
+}
+
+export function createSyntheticSandboxDemo() {
+  return request<Plan & { action_token: string }>('/api/synthetic-sandbox-demo', { method: 'POST' })
 }
 
 export function createUploadSession(payload: unknown) {

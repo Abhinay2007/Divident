@@ -60,6 +60,9 @@ class SessionCreateRequest(Contract):
 class SessionResponse(Contract):
     id: str
     mode: str
+    synthetic_demo: bool = False
+    synthetic_fixture_version: str | None = None
+    synthetic_policy_version: str | None = None
     status: str
     stage: str | None
     progress_done: int
@@ -73,11 +76,13 @@ class WorkspacePlanRef(Contract):
     id: str
     created_at: datetime
     last_updated_at: datetime
+    synthetic_demo: bool = False
 
 
 class WorkspaceSession(Contract):
     id: str
     mode: str
+    synthetic_demo: bool = False
     status: str
     source_count: int
     binary_count: int | None
@@ -161,6 +166,9 @@ class PlanResponse(Contract):
     id: str
     session_id: str
     state: str
+    synthetic_demo: bool = False
+    synthetic_fixture_version: str | None = None
+    synthetic_policy_version: str | None = None
     budget_cents: int = Field(strict=True)
     payable_total_cents: int = Field(strict=True)
     reserved_total_cents: int = Field(strict=True)

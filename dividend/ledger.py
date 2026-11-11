@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from .errors import StateError, ValidationError
-from .models import LedgerEvent, Plan
+from .models import LedgerEvent, Plan, Session
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,16 @@ _CSV_FIELDS = ("id", "created_at", "type", "plan_id", "session_id", "external_id
 
 
 def _event(db: DbSession, event_type: str, payload: dict, *, plan_id=None, session_id=None, external_id=None) -> LedgerEvent:
+    synthetic_demo = False
+    if plan_id is not None:
+        plan = db.get(Plan, plan_id)
+        synthetic_demo = bool(plan and plan.synthetic_demo)
+        session_id = session_id or (plan.session_id if plan else None)
+    if not synthetic_demo and session_id is not None:
+        session = db.get(Session, session_id)
+        synthetic_demo = bool(session and session.synthetic_demo)
+    if synthetic_demo:
+        payload = {**payload, "synthetic_demo": True}
     event = LedgerEvent(type=event_type, payload=payload, plan_id=plan_id, session_id=session_id, external_id=external_id)
     db.add(event)
     return event

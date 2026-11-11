@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { dispatchPayouts, getPlan, getPayouts, reconcilePayouts, retryFailedPayouts, ApiError, type PayoutBatch, type PayoutItem } from './api'
 import { payoutConfirmationMessage, payoutPreviewValid } from './payoutConfirmation.js'
+import SyntheticDemoBanner from './SyntheticDemoBanner'
 
 function money(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
@@ -86,6 +87,7 @@ export default function Payouts({ planId }: { planId: string }) {
 
   return <section className="discovery-page payouts-page">
     <a className="back-link" href={`/allocation/${record.id}`}>← Allocation review</a>
+    {record.synthetic_demo && <SyntheticDemoBanner/>}
     <div className="discovery-heading discovery-heading-session"><div><div className="eyebrow">PAYOUT TRACKING</div><h1>Distribution status.</h1><p>Batch and maintainer statuses from the payout service.</p></div><span className={`status-pill ${attention ? 'status-attention' : currentState === 'Successful' ? 'status-success' : currentState === 'Failed' ? 'status-failed' : ''}`}><span/>{currentState}</span></div>
 
     <section className="session-panel allocation-summary" aria-labelledby="payout-summary-title">

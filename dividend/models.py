@@ -72,6 +72,10 @@ class Session(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    synthetic_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    synthetic_fixture_version: Mapped[str | None] = mapped_column(String(64))
+    synthetic_policy_version: Mapped[str | None] = mapped_column(String(64))
+    synthetic_run_key: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="created")
     source_names: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     # NULL only for legacy sessions or paste intake without binary membership.
@@ -206,6 +210,9 @@ class Plan(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    synthetic_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    synthetic_fixture_version: Mapped[str | None] = mapped_column(String(64))
+    synthetic_policy_version: Mapped[str | None] = mapped_column(String(64))
     budget_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     payable_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     reserved_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -339,6 +346,7 @@ class PaymentOperation(Base):
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
+    synthetic_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     request_id: Mapped[str] = mapped_column(String(128), nullable=False)
     external_id: Mapped[str | None] = mapped_column(String(128))
     payout_batch_id: Mapped[str | None] = mapped_column(ForeignKey("payout_batches.id"))
@@ -348,6 +356,21 @@ class PaymentOperation(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow, onupdate=_utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class SyntheticSandboxRecipient(Base):
+    """Sandbox destination kept separate from opted-in maintainer records."""
+
+    __tablename__ = "synthetic_sandbox_recipients"
+    __table_args__ = (UniqueConstraint("upstream_key", "config_sha256", name="uq_synthetic_recipient_config"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    upstream_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str] = mapped_column(String(256), nullable=False)
+    market_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    config_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
 
 class LedgerEvent(Base):
